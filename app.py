@@ -1,4 +1,4 @@
-from fasthtml.common import *
+from fast_html.common import *
 from google.cloud import speech
 import queue
 import time

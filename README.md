@@ -112,4 +112,4 @@ Initially, this project encountered a `CERTIFICATE_VERIFY_FAILED: unable to get 
 *   **Outdated CA Certificates:** The local environment's trusted Certificate Authority (CA) bundles might be outdated.
 *   **System Trust Store Issues:** Problems with the operating system's root certificate store.
 
-While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` environment variable, these did not resolve the issue. The decision was made to shift to a web-based application using FastHTML and Docker for deployment. In deployed environments (especially cloud platforms), SSL certificate handling is typically managed by load balancers or the platform itself, often circumventing these local certificate issues.
+While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` environment variable, these did not resolve the issue. The decision was made to shift to a web-based application using `fast_html` and Docker for deployment. In deployed environments (especially cloud platforms), SSL certificate handling is typically managed by load balancers or the platform itself, often circumventing these local certificate issues.
