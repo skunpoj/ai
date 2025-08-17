@@ -229,7 +229,7 @@ def index():
         """)
 
 
-@app.websocket("/transcribe")
+@app.ws("/transcribe")
 async def transcribe(websocket: WebSocket):
     await websocket.accept()
     print("WebSocket accepted")
