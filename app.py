@@ -177,7 +177,8 @@ async def transcribe(websocket: WebSocket):
                 json.load(f) # Try to parse JSON to confirm validity
             await websocket.send_json({"status": "credentials_loaded", "path": credentials_path, "content": creds_content})
         except Exception as e:
-            await websocket.send_json({"status": "credentials_error", "error": f"Error validating credentials: {e}"})
+            # Send content even on error for debugging
+            await websocket.send_json({"status": "credentials_error", "error": f"Error validating credentials: {e}", "content": creds_content})
             print(f"Error validating credentials file: {e}")
     else:
         await websocket.send_json({"status": "credentials_not_found", "path": credentials_path})
