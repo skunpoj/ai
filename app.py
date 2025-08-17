@@ -73,6 +73,8 @@ def index():
                 };
 
                 mediaRecorder.ondataavailable = event => {
+                    console.log('Data available:', event.data.size, 'bytes');
+                    console.log('MediaRecorder mimeType:', mediaRecorder.mimeType);
                     audioChunks.push(event.data);
                     if (socket.readyState === WebSocket.OPEN) {
                         socket.send(event.data);
@@ -149,6 +151,7 @@ async def transcribe(websocket: WebSocket):
         async for response in responses:
             if not response.results:
                 continue
+            print(f"Received chunk of size: {len(chunk)}")
 
             result = response.results[0]
             if not result.alternatives:
