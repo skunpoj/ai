@@ -13,7 +13,7 @@ COPY app.py .
 
 # Create a directory for credentials and write the JSON content from an environment variable
 RUN mkdir -p /app/gcp-credentials
-RUN echo "${GOOGLE_APPLICATION_CREDENTIALS_JSON}" > /app/gcp-credentials/google-credentials.json
+RUN printf %s "${GOOGLE_APPLICATION_CREDENTIALS_JSON}" > /app/gcp-credentials/google-credentials.json
 
 # Set the GOOGLE_APPLICATION_CREDENTIALS environment variable to point to the created file
 ENV GOOGLE_APPLICATION_CREDENTIALS="/app/gcp-credentials/google-credentials.json"
