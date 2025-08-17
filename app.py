@@ -86,10 +86,11 @@ def index():
 
                 mediaRecorder.onstop = async () => {
                     if (socket.readyState === WebSocket.OPEN) {
+                        socket.send("__END_STREAM__"); // Send end signal
                         socket.close();
                     }
 
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                     const audioUrl = URL.createObjectURL(audioBlob);
 
                     // Update the last recording with the audio URL
@@ -143,33 +144,37 @@ async def transcribe(websocket: WebSocket):
         config=config, interim_results=True
     )
 
-    audio_requests = (
-        speech.StreamingRecognizeRequest(audio_content=base64.b64decode(chunk))
-        async for chunk in websocket.iter_text()
-    )
+    # Create a generator for streaming audio requests
+    async def request_generator():
+        while True:
+            try:
+                message = await websocket.receive_text()
+                if message == "__END_STREAM__": # Custom signal for stream end
+                    break
+                decoded_chunk = base64.b64decode(message)
+                print(f"Received and decoded chunk of size: {len(decoded_chunk)}")
+                yield speech.StreamingRecognizeRequest(audio_content=decoded_chunk)
+            except Exception as e:
+                print(f"Error receiving or decoding chunk: {e}")
+                break
 
     try:
-        responses = client.streaming_recognize(streaming_config, audio_requests)
+        responses = client.streaming_recognize(streaming_config, request_generator())
         print("Receiving responses...")
         async for response in responses:
             if not response.results:
                 continue
-            # Assuming `chunk` here is the last processed chunk in the streaming_recognize loop
-            # For accurate logging of *each* chunk received from the websocket, we need to modify the loop structure
-            # However, for now, this log will reflect the chunk being processed by Google API.
-            # A more robust logging would involve logging before yielding to audio_requests.
-            print(f"Processing chunk with decoded size: {len(base64.b64decode(chunk))}") # Adjusted Line
-
+            
             result = response.results[0]
             if not result.alternatives:
                 continue
-
+            
             transcript = result.alternatives[0].transcript
             is_final = result.is_final
-
+            
             # Send transcription back to client via WebSocket
             await websocket.send_json({"transcript": transcript, "is_final": is_final})
-
+            
     except Exception as e:
         print(f"WebSocket Error: {e}")
     finally:
