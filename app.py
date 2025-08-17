@@ -130,7 +130,7 @@ def index():
 
 @app.ws("/transcribe")
 async def transcribe(websocket: WebSocket):
-    await websocket.accept()
+    # await websocket.accept() # Removed explicit accept
     print("WebSocket accepted")
 
     # Configure Google Cloud Speech-to-Text client
