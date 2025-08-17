@@ -89,7 +89,7 @@ To run the application using Docker, which is recommended for deployment and con
     *   **Run the container:**
         ```bash
         docker run -d \
-          -p 8000:8000 \
+          -p 8080:8080 \
           -v /path/on/host/to/service_account_key.json:/app/service_account_key.json \
           -e GOOGLE_APPLICATION_CREDENTIALS=/app/service_account_key.json \
           speech-to-text-app
@@ -98,7 +98,7 @@ To run the application using Docker, which is recommended for deployment and con
         *   For Windows paths in PowerShell, use:
             ```powershell
             docker run -d `
-              -p 8000:8000 `
+              -p 8080:8080 `
               -v "C:\Users\YourUser\keys\service_account_key.json":/app/service_account_key.json `
               -e GOOGLE_APPLICATION_CREDENTIALS=/app/service_account_key.json `
               speech-to-text-app
