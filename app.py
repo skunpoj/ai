@@ -135,6 +135,7 @@ def index():
         Button("Start Recording", id="startRecording"),\
         Button("Stop Recording", id="stopRecording", disabled=True),\
         P("Transcription: ", id="transcription"),\
+        Button("Play Recorded Audio", id="playRecordedAudio", disabled=True),\
         Script("""
             let mediaRecorder;
             let audioChunks = [];
@@ -168,6 +169,15 @@ def index():
                     });
                     const data = await response.text();
                     document.getElementById('transcription').innerText = "Transcription: " + data;
+
+                    // Enable playback button and play audio
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    const audioPlayer = new Audio(audioUrl);
+                    audioPlayer.play();
+                    document.getElementById('playRecordedAudio').disabled = false;
+                    document.getElementById('playRecordedAudio').onclick = () => {
+                        audioPlayer.play();
+                    };
                 };
 
                 mediaRecorder.start();
