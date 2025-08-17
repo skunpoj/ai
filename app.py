@@ -139,7 +139,7 @@ def index():
         Script("""
             let mediaRecorder;
             let audioChunks = [];
-            let recognitionStream;
+            let socket;
             let recordings = []; // Array to store recorded audios and their transcriptions
 
             document.getElementById('startRecording').addEventListener('click', async () => {
@@ -151,31 +151,58 @@ def index():
                 mediaRecorder = new MediaRecorder(stream);
                 audioChunks = [];
 
+                // Establish WebSocket connection
+                socket = new WebSocket(`ws://${window.location.host}/transcribe`);
+
+                socket.onopen = () => {
+                    console.log('WebSocket opened');
+                    mediaRecorder.start(CHUNK_SIZE); // Start recording and emit data every CHUNK_SIZE ms
+                };
+
+                socket.onmessage = event => {
+                    const data = JSON.parse(event.data);
+                    if (data.transcript) {
+                        document.getElementById('transcription').innerText = `Transcription: ${data.transcript}`;
+                        if (data.is_final) {
+                            // Only add final transcriptions to recordings
+                            recordings.push({ audioUrl: null, transcription: data.transcript }); // audioUrl will be set on stop
+                            displayRecordings();
+                        }
+                    }
+                };
+
+                socket.onclose = () => {
+                    console.log('WebSocket closed');
+                };
+
+                socket.onerror = error => {
+                    console.error('WebSocket error:', error);
+                };
+
                 mediaRecorder.ondataavailable = event => {
                     audioChunks.push(event.data);
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send(event.data);
+                    }
                 };
 
                 mediaRecorder.onstop = async () => {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.close();
+                    }
+
                     const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
                     const audioUrl = URL.createObjectURL(audioBlob);
-                    const arrayBuffer = await audioBlob.arrayBuffer();
-                    const audioContent = new Uint8Array(arrayBuffer);
 
-                    // Send audio to backend for transcription
-                    const response = await fetch('/transcribe', {
-                        method: 'POST',
-                        body: audioContent,
-                        headers: {
-                            'Content-Type': 'application/octet-stream'
+                    // Update the last recording with the audio URL
+                    if (recordings.length > 0) {
+                        const lastRecording = recordings[recordings.length - 1];
+                        if (lastRecording.audioUrl === null) { // Only update if not already set
+                            lastRecording.audioUrl = audioUrl;
+                            displayRecordings(); // Re-render to show audio player
                         }
-                    });
-                    const data = await response.text();
-
-                    recordings.push({ audioUrl: audioUrl, transcription: data });
-                    displayRecordings();
+                    }
                 };
-
-                mediaRecorder.start();
             });
 
             document.getElementById('stopRecording').addEventListener('click', () => {
@@ -193,7 +220,7 @@ def index():
                     const recordDiv = document.createElement('div');
                     recordDiv.innerHTML = `
                         <h3>Recording ${index + 1}</h3>
-                        <audio controls src="${record.audioUrl}"></audio>
+                        ${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''}
                         <p>Transcription: ${record.transcription}</p>
                     `;
                     container.appendChild(recordDiv);
@@ -202,18 +229,48 @@ def index():
         """)
 
 
-@rt("/transcribe")
-async def transcribe(request: Request):
-    audio_data = await request.body()
+@app.websocket("/transcribe")
+async def transcribe(websocket: WebSocket):
+    await websocket.accept()
+    print("WebSocket accepted")
 
-    # Create a simple generator for the audio data
-    async def audio_chunk_generator():
-        # For now, we'll treat the entire audio_data as a single chunk
-        # In a real-time streaming scenario, you'd process chunks as they arrive
-        yield audio_data
+    # Configure Google Cloud Speech-to-Text client
+    client = speech.SpeechClient()
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,  # Assuming webm/opus from MediaRecorder
+        sample_rate_hertz=SAMPLE_RATE,
+        language_code="en-US",
+    )
+    streaming_config = speech.StreamingRecognitionConfig(
+        config=config, interim_results=True
+    )
 
-    transcript = transcribe_audio(audio_chunk_generator())
-    return transcript
+    audio_requests = (
+        speech.StreamingRecognizeRequest(audio_content=chunk)
+        async for chunk in websocket.iter_bytes()
+    )
 
+    try:
+        responses = client.streaming_recognize(streaming_config, audio_requests)
+        print("Receiving responses...")
+        async for response in responses:
+            if not response.results:
+                continue
+
+            result = response.results[0]
+            if not result.alternatives:
+                continue
+
+            transcript = result.alternatives[0].transcript
+            is_final = result.is_final
+
+            # Send transcription back to client via WebSocket
+            await websocket.send_json({"transcript": transcript, "is_final": is_final})
+
+    except Exception as e:
+        print(f"WebSocket Error: {e}")
+    finally:
+        print("WebSocket closed (backend)")
+        await websocket.close()
 
 serve()
