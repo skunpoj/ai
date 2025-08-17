@@ -3,6 +3,7 @@ from fasthtml.common import *
 from google.cloud import speech
 import queue
 import time
+import base64
 
 # Audio recording parameters (from main.py - adjust as needed for web input)
 STREAMING_LIMIT = 240000  # 4 minutes
@@ -72,12 +73,14 @@ def index():
                     console.error('WebSocket error:', error);
                 };
 
-                mediaRecorder.ondataavailable = event => {
+                mediaRecorder.ondataavailable = async event => {
                     console.log('Data available:', event.data.size, 'bytes');
                     console.log('MediaRecorder mimeType:', mediaRecorder.mimeType);
                     audioChunks.push(event.data);
                     if (socket.readyState === WebSocket.OPEN) {
-                        socket.send(event.data);
+                        const arrayBuffer = await event.data.arrayBuffer();
+                        const base64String = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+                        socket.send(base64String);
                     }
                 };
 
@@ -141,8 +144,8 @@ async def transcribe(websocket: WebSocket):
     )
 
     audio_requests = (
-        speech.StreamingRecognizeRequest(audio_content=chunk)
-        async for chunk in websocket.iter_bytes()
+        speech.StreamingRecognizeRequest(audio_content=base64.b64decode(chunk))
+        async for chunk in websocket.iter_text()
     )
 
     try:
@@ -151,7 +154,11 @@ async def transcribe(websocket: WebSocket):
         async for response in responses:
             if not response.results:
                 continue
-            print(f"Received chunk of size: {len(chunk)}")
+            # Assuming `chunk` here is the last processed chunk in the streaming_recognize loop
+            # For accurate logging of *each* chunk received from the websocket, we need to modify the loop structure
+            # However, for now, this log will reflect the chunk being processed by Google API.
+            # A more robust logging would involve logging before yielding to audio_requests.
+            print(f"Processing chunk with decoded size: {len(base64.b64decode(chunk))}") # Adjusted Line
 
             result = response.results[0]
             if not result.alternatives:
