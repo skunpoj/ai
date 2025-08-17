@@ -36,7 +36,7 @@ def get_current_time() -> int:
     return int(round(time.time() * 1000))
 
 
-app, rt = fast_app()
+app, rt = fast_app(exts='ws') # Added exts='ws'
 
 # Configure Google Cloud Speech-to-Text client globally
 global_speech_client = None
@@ -54,8 +54,8 @@ if credentials_path and os.path.exists(credentials_path):
         global_speech_client = speech.SpeechClient()
         global_recognition_config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-            sample_rate_hertz=SAMPLE_RATE,
-            language_code="en-US",
+        sample_rate_hertz=SAMPLE_RATE,
+        language_code="en-US",
         )
         global_streaming_config = speech.StreamingRecognitionConfig(
             config=global_recognition_config, interim_results=True
@@ -194,7 +194,9 @@ async def transcribe(websocket: WebSocket):
         while True:
             try:
                 message = await websocket.receive_json()
+                print(f"Backend received JSON message: {message}") # Added logging
                 if "end_stream" in message and message["end_stream"]:
+                    print("Backend received end_stream signal.") # Added logging
                     break
                 
                 if "audio" in message:
@@ -204,28 +206,30 @@ async def transcribe(websocket: WebSocket):
                 else:
                     print("Received non-audio JSON message:", message)
             except Exception as e:
-                print(f"Error receiving or decoding chunk: {e}")
+                print(f"Error receiving or decoding chunk in request_generator: {e}") # Added logging
                 break
 
     try:
         responses = global_speech_client.streaming_recognize(global_streaming_config, request_generator())
-        print("Receiving responses...")
+        print("Receiving responses from Google Speech API...") # Added logging
         async for response in responses:
             if not response.results:
+                print("No transcription results in response.") # Added logging
                 continue
             
             result = response.results[0]
             if not result.alternatives:
+                print("No alternatives in transcription result.") # Added logging
                 continue
             
             transcript = result.alternatives[0].transcript
             is_final = result.is_final
             
-            # Send transcription back to client via WebSocket
+            print(f"Sending transcription to frontend: {transcript} (Final: {is_final})") # Added logging
             await websocket.send_json({"transcript": transcript, "is_final": is_final})
             
     except Exception as e:
-        print(f"WebSocket Error: {e}")
+        print(f"WebSocket Error during streaming: {e}") # Modified logging
     finally:
         print("WebSocket closed (backend)")
         await websocket.close()
