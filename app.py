@@ -38,6 +38,34 @@ def get_current_time() -> int:
 
 app, rt = fast_app()
 
+# Configure Google Cloud Speech-to-Text client globally
+global_speech_client = None
+global_recognition_config = None
+global_streaming_config = None
+
+# Credentials Check and Send to Frontend (Global initialization)
+credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+if credentials_path and os.path.exists(credentials_path):
+    try:
+        with open(credentials_path, 'r') as f:
+            creds_content = f.read()
+            json.loads(creds_content) # Validate JSON content
+        
+        global_speech_client = speech.SpeechClient()
+        global_recognition_config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+            sample_rate_hertz=SAMPLE_RATE,
+            language_code="en-US",
+        )
+        global_streaming_config = speech.StreamingRecognitionConfig(
+            config=global_recognition_config, interim_results=True
+        )
+        print(f"Google Cloud Speech client initialized successfully using credentials from: {credentials_path}")
+    except Exception as e:
+        print(f"Error initializing Google Cloud Speech client: {e}")
+else:
+    print(f"Google Cloud credentials file not found or path not set: {credentials_path}")
+
 
 @rt("/")
 def index():
@@ -153,36 +181,13 @@ def index():
 
 @app.ws("/transcribe")
 async def transcribe(websocket: WebSocket):
-    # await websocket.accept() # Removed explicit accept
     print("WebSocket accepted")
 
-    # Configure Google Cloud Speech-to-Text client
-    client = speech.SpeechClient()
-    config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,  # Assuming webm/opus from MediaRecorder
-        sample_rate_hertz=SAMPLE_RATE,
-        language_code="en-US",
-    )
-    streaming_config = speech.StreamingRecognitionConfig(
-        config=config, interim_results=True
-    )
-
-    # Credentials Check and Send to Frontend (Only send once per connection)
-    credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if credentials_path and os.path.exists(credentials_path):
-        try:
-            # Attempt to load JSON to validate, not just read
-            with open(credentials_path, 'r') as f:
-                creds_content = f.read()
-                json.loads(creds_content) # Changed from json.load(f) to json.loads(creds_content)
-            await websocket.send_json({"status": "credentials_loaded", "path": credentials_path, "content": creds_content})
-        except Exception as e:
-            # Send content even on error for debugging
-            await websocket.send_json({"status": "credentials_error", "error": f"Error validating credentials: {e}", "content": creds_content})
-            print(f"Error validating credentials file: {e}")
-    else:
-        await websocket.send_json({"status": "credentials_not_found", "path": credentials_path})
-        print(f"Credentials file not found or path not set: {credentials_path}")
+    # Ensure the client is available
+    if not global_speech_client:
+        print("Error: Google Cloud Speech client not initialized.")
+        await websocket.close(code=1011, reason="Google Speech client not ready.")
+        return
 
     # Create a generator for streaming audio requests
     async def request_generator():
@@ -203,7 +208,7 @@ async def transcribe(websocket: WebSocket):
                 break
 
     try:
-        responses = client.streaming_recognize(streaming_config, request_generator())
+        responses = global_speech_client.streaming_recognize(global_streaming_config, request_generator())
         print("Receiving responses...")
         async for response in responses:
             if not response.results:
