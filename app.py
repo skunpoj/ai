@@ -80,13 +80,13 @@ def index():
                     if (socket.readyState === WebSocket.OPEN) {
                         const arrayBuffer = await event.data.arrayBuffer();
                         const base64String = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
-                        socket.send(base64String);
+                        socket.send(JSON.stringify({ audio: base64String }));
                     }
                 };
 
                 mediaRecorder.onstop = async () => {
                     if (socket.readyState === WebSocket.OPEN) {
-                        socket.send("__END_STREAM__"); // Send end signal
+                        socket.send(JSON.stringify({ end_stream: true })); // Send end signal as JSON
                         socket.close();
                     }
 
@@ -148,12 +148,16 @@ async def transcribe(websocket: WebSocket):
     async def request_generator():
         while True:
             try:
-                message = await websocket.receive_text()
-                if message == "__END_STREAM__": # Custom signal for stream end
+                message = await websocket.receive_json()
+                if "end_stream" in message and message["end_stream"]:
                     break
-                decoded_chunk = base64.b64decode(message)
-                print(f"Received and decoded chunk of size: {len(decoded_chunk)}")
-                yield speech.StreamingRecognizeRequest(audio_content=decoded_chunk)
+                
+                if "audio" in message:
+                    decoded_chunk = base64.b64decode(message["audio"])
+                    print(f"Received and decoded chunk of size: {len(decoded_chunk)}")
+                    yield speech.StreamingRecognizeRequest(audio_content=decoded_chunk)
+                else:
+                    print("Received non-audio JSON message:", message)
             except Exception as e:
                 print(f"Error receiving or decoding chunk: {e}")
                 break
