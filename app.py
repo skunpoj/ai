@@ -135,11 +135,12 @@ def index():
         Button("Start Recording", id="startRecording"),\
         Button("Stop Recording", id="stopRecording", disabled=True),\
         P("Transcription: ", id="transcription"),\
-        Button("Play Recorded Audio", id="playRecordedAudio", disabled=True),\
+        Div(id="recordingsContainer"),\
         Script("""
             let mediaRecorder;
             let audioChunks = [];
             let recognitionStream;
+            let recordings = []; // Array to store recorded audios and their transcriptions
 
             document.getElementById('startRecording').addEventListener('click', async () => {
                 document.getElementById('startRecording').disabled = true;
@@ -156,6 +157,7 @@ def index():
 
                 mediaRecorder.onstop = async () => {
                     const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
                     const arrayBuffer = await audioBlob.arrayBuffer();
                     const audioContent = new Uint8Array(arrayBuffer);
 
@@ -168,16 +170,9 @@ def index():
                         }
                     });
                     const data = await response.text();
-                    document.getElementById('transcription').innerText = "Transcription: " + data;
 
-                    // Enable playback button and play audio
-                    const audioUrl = URL.createObjectURL(audioBlob);
-                    const audioPlayer = new Audio(audioUrl);
-                    audioPlayer.play();
-                    document.getElementById('playRecordedAudio').disabled = false;
-                    document.getElementById('playRecordedAudio').onclick = () => {
-                        audioPlayer.play();
-                    };
+                    recordings.push({ audioUrl: audioUrl, transcription: data });
+                    displayRecordings();
                 };
 
                 mediaRecorder.start();
@@ -190,6 +185,20 @@ def index():
                     mediaRecorder.stop();
                 }
             });
+
+            function displayRecordings() {
+                const container = document.getElementById('recordingsContainer');
+                container.innerHTML = ''; // Clear previous recordings
+                recordings.forEach((record, index) => {
+                    const recordDiv = document.createElement('div');
+                    recordDiv.innerHTML = `
+                        <h3>Recording ${index + 1}</h3>
+                        <audio controls src="${record.audioUrl}"></audio>
+                        <p>Transcription: ${record.transcription}</p>
+                    `;
+                    container.appendChild(recordDiv);
+                });
+            }
         """)
 
 
