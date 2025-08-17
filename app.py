@@ -124,7 +124,7 @@ def transcribe_audio(audio_content_generator):
 
 app, rt = fast_app()
 
-@rt.get("/")
+@rt("/")
 def index():
     return Title("Speech-to-Text with FastHTML"),\
         H1("Speech-to-Text"),\
@@ -179,7 +179,7 @@ def index():
         """)
 
 
-@rt.post("/transcribe")
+@rt("/transcribe")
 async def transcribe(request: Request):
     audio_data = await request.body()
 
