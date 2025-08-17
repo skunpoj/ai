@@ -65,11 +65,11 @@ To run this application locally, follow these steps:
 
 6.  **Run the FastHTML application:**
     ```bash
-    uvicorn app:app --host 0.0.0.0 --port 8000
+    python app.py
     ```
 
 7.  **Access the application:**
-    Open your web browser and navigate to `http://localhost:8000`.
+    Open your web browser and navigate to `http://localhost:5001`.
 
 ### Running with Docker
 

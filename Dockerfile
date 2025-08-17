@@ -16,4 +16,4 @@ EXPOSE 8000
 
 # Command to run your application
 # The GOOGLE_APPLICATION_CREDENTIALS environment variable will be set when you run the container
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "app.py"]

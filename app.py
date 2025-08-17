@@ -122,73 +122,75 @@ def transcribe_audio(audio_content_generator):
     return " ".join(transcript_result)
 
 
-@fast_app
-def app():
-    @get("/")
-    def index():
-        return Title("Speech-to-Text with FastHTML"),\
-            H1("Speech-to-Text"),\
-            Button("Start Recording", id="startRecording"),\
-            Button("Stop Recording", id="stopRecording", disabled=True),\
-            P("Transcription: ", id="transcription"),\
-            Script("""
-                let mediaRecorder;
-                let audioChunks = [];
-                let recognitionStream;
+app, rt = fast_app()
 
-                document.getElementById('startRecording').addEventListener('click', async () => {
-                    document.getElementById('startRecording').disabled = true;
-                    document.getElementById('stopRecording').disabled = false;
-                    document.getElementById('transcription').innerText = "Transcription: ";
+@rt.get("/")
+def index():
+    return Title("Speech-to-Text with FastHTML"),\
+        H1("Speech-to-Text"),\
+        Button("Start Recording", id="startRecording"),\
+        Button("Stop Recording", id="stopRecording", disabled=True),\
+        P("Transcription: ", id="transcription"),\
+        Script("""
+            let mediaRecorder;
+            let audioChunks = [];
+            let recognitionStream;
 
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    mediaRecorder = new MediaRecorder(stream);
-                    audioChunks = [];
+            document.getElementById('startRecording').addEventListener('click', async () => {
+                document.getElementById('startRecording').disabled = true;
+                document.getElementById('stopRecording').disabled = false;
+                document.getElementById('transcription').innerText = "Transcription: ";
 
-                    mediaRecorder.ondataavailable = event => {
-                        audioChunks.push(event.data);
-                    };
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
 
-                    mediaRecorder.onstop = async () => {
-                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                        const arrayBuffer = await audioBlob.arrayBuffer();
-                        const audioContent = new Uint8Array(arrayBuffer);
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
 
-                        // Send audio to backend for transcription
-                        const response = await fetch('/transcribe', {
-                            method: 'POST',
-                            body: audioContent,
-                            headers: {
-                                'Content-Type': 'application/octet-stream'
-                            }
-                        });
-                        const data = await response.text();
-                        document.getElementById('transcription').innerText = "Transcription: " + data;
-                    };
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const arrayBuffer = await audioBlob.arrayBuffer();
+                    const audioContent = new Uint8Array(arrayBuffer);
 
-                    mediaRecorder.start();
-                });
+                    // Send audio to backend for transcription
+                    const response = await fetch('/transcribe', {
+                        method: 'POST',
+                        body: audioContent,
+                        headers: {
+                            'Content-Type': 'application/octet-stream'
+                        }
+                    });
+                    const data = await response.text();
+                    document.getElementById('transcription').innerText = "Transcription: " + data;
+                };
 
-                document.getElementById('stopRecording').addEventListener('click', () => {
-                    document.getElementById('startRecording').disabled = false;
-                    document.getElementById('stopRecording').disabled = true;
-                    if (mediaRecorder && mediaRecorder.state === 'recording') {
-                        mediaRecorder.stop();
-                    }
-                });
-            """)
+                mediaRecorder.start();
+            });
 
-    # Placeholder for a new route to handle speech-to-text
-    # This will be refined in the next step to accept audio from the web
-    @post("/transcribe")
-    async def transcribe(request: Request):
-        audio_data = await request.body()
+            document.getElementById('stopRecording').addEventListener('click', () => {
+                document.getElementById('startRecording').disabled = false;
+                document.getElementById('stopRecording').disabled = true;
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
+            });
+        """)
 
-        # Create a simple generator for the audio data
-        async def audio_chunk_generator():
-            # For now, we'll treat the entire audio_data as a single chunk
-            # In a real-time streaming scenario, you'd process chunks as they arrive
-            yield audio_data
 
-        transcript = transcribe_audio(audio_chunk_generator())
-        return transcript
+@rt.post("/transcribe")
+async def transcribe(request: Request):
+    audio_data = await request.body()
+
+    # Create a simple generator for the audio data
+    async def audio_chunk_generator():
+        # For now, we'll treat the entire audio_data as a single chunk
+        # In a real-time streaming scenario, you'd process chunks as they arrive
+        yield audio_data
+
+    transcript = transcribe_audio(audio_chunk_generator())
+    return transcript
+
+
+serve()
