@@ -136,6 +136,7 @@ def index():
         Button("Stop Recording", id="stopRecording", disabled=True),\
         P("Transcription: ", id="transcription"),\
         Div(id="recordingsContainer"),\
+        Script(f"let CHUNK_SIZE = {CHUNK_SIZE};"),\
         Script("""
             let mediaRecorder;
             let audioChunks = [];
