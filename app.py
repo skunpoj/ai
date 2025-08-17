@@ -4,6 +4,26 @@ from google.cloud import speech
 import queue
 import time
 import base64
+import tempfile
+import json # Added for json.load
+
+# --- Credentials Handling (START) ---
+credentials_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+if credentials_json:
+    try:
+        # Create a temporary file to store credentials
+        fd, path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, 'w') as tmp:
+            tmp.write(credentials_json)
+        
+        # Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+        print(f"Google Cloud credentials written to temporary file: {path}")
+    except Exception as e:
+        print(f"Error writing Google Cloud credentials to temporary file: {e}")
+else:
+    print("GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable not found.")
+# --- Credentials Handling (END) ---
 
 # Audio recording parameters (from main.py - adjust as needed for web input)
 STREAMING_LIMIT = 240000  # 4 minutes
@@ -18,8 +38,6 @@ def get_current_time() -> int:
 
 app, rt = fast_app()
 
-# Print the GOOGLE_APPLICATION_CREDENTIALS environment variable for verification
-print(f"GOOGLE_APPLICATION_CREDENTIALS: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
 
 @rt("/")
 def index():
@@ -55,7 +73,12 @@ def index():
 
                 socket.onmessage = event => {
                     const data = JSON.parse(event.data);
-                    if (data.transcript) {
+                    if (data.status) {
+                        console.log(`Credential Status: ${data.status}`);
+                        if (data.path) console.log(`Credential Path: ${data.path}`);
+                        if (data.error) console.error(`Credential Error: ${data.error}`);
+                        if (data.content) console.log(`Credential Content:\n${data.content}`); // Added to log content
+                    } else if (data.transcript) {
                         document.getElementById('transcription').innerText = `Transcription: ${data.transcript}`;
                         if (data.is_final) {
                             // Only add final transcriptions to recordings
@@ -144,15 +167,20 @@ async def transcribe(websocket: WebSocket):
         config=config, interim_results=True
     )
 
+    # Credentials Check and Send to Frontend (Only send once per connection)
     credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if credentials_path and os.path.exists(credentials_path):
         try:
+            # Attempt to load JSON to validate, not just read
             with open(credentials_path, 'r') as f:
                 creds_content = f.read()
-                print(f"Content of credentials file ({credentials_path}):\n{creds_content}")
+                json.load(f) # Try to parse JSON to confirm validity
+            await websocket.send_json({"status": "credentials_loaded", "path": credentials_path, "content": creds_content})
         except Exception as e:
-            print(f"Error reading credentials file: {e}")
+            await websocket.send_json({"status": "credentials_error", "error": f"Error validating credentials: {e}"})
+            print(f"Error validating credentials file: {e}")
     else:
+        await websocket.send_json({"status": "credentials_not_found", "path": credentials_path})
         print(f"Credentials file not found or path not set: {credentials_path}")
 
     # Create a generator for streaming audio requests
