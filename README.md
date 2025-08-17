@@ -104,6 +104,27 @@ To run the application using Docker, which is recommended for deployment and con
               speech-to-text-app
             ```
 
+### Deployment on Railway (Secure Credential Handling)
+
+When deploying to Railway, you can securely inject your Google Cloud service account JSON key using Railway's environment variables and build commands. This prevents the key from being committed to your repository or baked into your Docker image.
+
+1.  **Create a Railway Environment Variable for the JSON content:**
+    *   In your Railway project settings, go to the "Variables" tab.
+    *   Add a new variable, for example, named `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
+    *   For its value, **paste the entire content of your `service_account_key.json` file as a single string.** Ensure there are no extra spaces or newlines.
+
+2.  **Configure Railway Build Command to create the JSON file:**
+    *   In your Railway project settings, go to the "Build" tab.
+    *   Modify your build command (or add a pre-build command) to write the content of `GOOGLE_APPLICATION_CREDENTIALS_JSON` to a file within your container's `/app` directory. For example:
+        ```bash
+        echo $GOOGLE_APPLICATION_CREDENTIALS_JSON > /app/service_account_key.json
+        ```
+        *   Ensure this command runs *before* your application starts and attempts to use the credentials.
+
+3.  **Set `GOOGLE_APPLICATION_CREDENTIALS` environment variable in Railway:**
+    *   In your Railway project settings, under the "Variables" tab, add another environment variable named `GOOGLE_APPLICATION_CREDENTIALS`.
+    *   Set its value to the path where you created the JSON file in the previous step: `/app/service_account_key.json`.
+
 ### Original Certificate Verification Issue (CERTIFICATE_VERIFY_FAILED)
 
 Initially, this project encountered a `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` error when attempting to connect to Google Cloud APIs directly from the local Python environment. This issue is often related to:
@@ -112,4 +133,4 @@ Initially, this project encountered a `CERTIFICATE_VERIFY_FAILED: unable to get 
 *   **Outdated CA Certificates:** The local environment's trusted Certificate Authority (CA) bundles might be outdated.
 *   **System Trust Store Issues:** Problems with the operating system's root certificate store.
 
-While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` environment variable, these did not resolve the issue. The decision was made to shift to a web-based application using `fast_html` and Docker for deployment. In deployed environments (especially cloud platforms), SSL certificate handling is typically managed by load balancers or the platform itself, often circumventing these local certificate issues.
+While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` environment variable, these did not resolve the issue. The decision was made to shift to a web-based application using `python-fasthtml` and Docker for deployment. In deployed environments (especially cloud platforms), SSL certificate handling is typically managed by load balancers or the platform itself, often circumventing these local certificate issues.
