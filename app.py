@@ -152,7 +152,7 @@ def index():
                 audioChunks = [];
 
                 // Establish WebSocket connection
-                socket = new WebSocket(`ws://${window.location.host}/transcribe`);
+                socket = new WebSocket(`wss://${window.location.host}/transcribe`);
 
                 socket.onopen = () => {
                     console.log('WebSocket opened');
