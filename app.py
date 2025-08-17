@@ -1,3 +1,4 @@
+import os
 from fasthtml.common import *
 from google.cloud import speech
 import queue
@@ -123,6 +124,9 @@ def transcribe_audio(audio_content_generator):
 
 
 app, rt = fast_app()
+
+# Print the GOOGLE_APPLICATION_CREDENTIALS environment variable for verification
+print(f"GOOGLE_APPLICATION_CREDENTIALS: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
 
 @rt("/")
 def index():
