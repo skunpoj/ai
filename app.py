@@ -144,6 +144,17 @@ async def transcribe(websocket: WebSocket):
         config=config, interim_results=True
     )
 
+    credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if credentials_path and os.path.exists(credentials_path):
+        try:
+            with open(credentials_path, 'r') as f:
+                creds_content = f.read()
+                print(f"Content of credentials file ({credentials_path}):\n{creds_content}")
+        except Exception as e:
+            print(f"Error reading credentials file: {e}")
+    else:
+        print(f"Credentials file not found or path not set: {credentials_path}")
+
     # Create a generator for streaming audio requests
     async def request_generator():
         while True:
