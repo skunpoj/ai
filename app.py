@@ -131,15 +131,15 @@ def app():
             Button("Start Recording", id="startRecording"),\
             Button("Stop Recording", id="stopRecording", disabled=True),\
             P("Transcription: ", id="transcription"),\
-            Script(\'\'\'
+            Script("""
                 let mediaRecorder;
                 let audioChunks = [];
                 let recognitionStream;
 
-                document.getElementById(\'startRecording\').addEventListener(\'click\', async () => {
-                    document.getElementById(\'startRecording\').disabled = true;
-                    document.getElementById(\'stopRecording\').disabled = false;
-                    document.getElementById(\'transcription\').innerText = "Transcription: ";
+                document.getElementById('startRecording').addEventListener('click', async () => {
+                    document.getElementById('startRecording').disabled = true;
+                    document.getElementById('stopRecording').disabled = false;
+                    document.getElementById('transcription').innerText = "Transcription: ";
 
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     mediaRecorder = new MediaRecorder(stream);
@@ -176,7 +176,7 @@ def app():
                         mediaRecorder.stop();
                     }
                 });
-            \'\'\')
+            """)
 
     # Placeholder for a new route to handle speech-to-text
     # This will be refined in the next step to accept audio from the web
