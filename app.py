@@ -174,7 +174,7 @@ async def transcribe(websocket: WebSocket):
             # Attempt to load JSON to validate, not just read
             with open(credentials_path, 'r') as f:
                 creds_content = f.read()
-                json.load(f) # Try to parse JSON to confirm validity
+                json.loads(creds_content) # Changed from json.load(f) to json.loads(creds_content)
             await websocket.send_json({"status": "credentials_loaded", "path": credentials_path, "content": creds_content})
         except Exception as e:
             # Send content even on error for debugging
