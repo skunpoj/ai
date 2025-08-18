@@ -1,6 +1,6 @@
 import os
 from fasthtml.common import *
-from starlette.responses import FileResponse # Corrected import for FileResponse
+from starlette.responses import FileResponse, HTMLResponse # Added HTMLResponse
 from google.cloud import speech
 import queue
 import time
@@ -27,6 +27,9 @@ else:
 STREAMING_LIMIT = 240000  # 4 minutes
 SAMPLE_RATE = 16000
 CHUNK_SIZE = int(SAMPLE_RATE / 10)  # 100ms
+
+print(f"Current working directory: {os.getcwd()}")
+print(f"Absolute path to static directory: {os.path.abspath('static')}")
 
 def get_current_time() -> int:
     """Return Current Time in MS."""
@@ -140,6 +143,10 @@ async def transcribe(websocket: WebSocket):
 
 @app.get("/static/{filename:path}")
 async def static_files(filename: str):
-    return FileResponse(f"static/{filename}")
+    try:
+        return FileResponse(f"static/{filename}")
+    except FileNotFoundError:
+        print(f"File not found: static/{filename}")
+        return HTMLResponse(status_code=404, content="Static file not found.")
 
 serve()
