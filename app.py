@@ -1,6 +1,5 @@
 import os
 from fasthtml.common import *
-from starlette.responses import FileResponse, HTMLResponse # Added HTMLResponse
 from google.cloud import speech
 import queue
 import time
@@ -27,6 +26,8 @@ else:
 STREAMING_LIMIT = 240000  # 4 minutes
 SAMPLE_RATE = 16000
 CHUNK_SIZE = int(SAMPLE_RATE / 10)  # 100ms
+
+app.static_route_exts(prefix="/static", static_path="static") # Configure static files serving
 
 print(f"Current working directory: {os.getcwd()}")
 print(f"Absolute path to static directory: {os.path.abspath('static')}")
@@ -140,13 +141,5 @@ async def transcribe(websocket: WebSocket):
     finally:
         print("WebSocket closed (backend)")
         await websocket.close()
-
-@app.get("/static/{filename:path}")
-async def static_files(filename: str):
-    try:
-        return FileResponse(f"static/{filename}")
-    except FileNotFoundError:
-        print(f"File not found: static/{filename}")
-        return HTMLResponse(status_code=404, content="Static file not found.")
 
 serve()
