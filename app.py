@@ -104,11 +104,16 @@ def index():
 
                 socket.onmessage = event => {
                     const data = JSON.parse(event.data);
-                    if (data.status) {
+                    if (data.type === "ready") {
+                        console.log('Backend ready signal received. Starting MediaRecorder.');
+                        mediaRecorder.start(CHUNK_SIZE); // Start recording only after ready signal
+                    } else if (data.status) {
                         console.log(`Credential Status: ${data.status}`);
                         if (data.path) console.log(`Credential Path: ${data.path}`);
                         if (data.error) console.error(`Credential Error: ${data.error}`);
-                        if (data.content) console.log(`Credential Content:\n${data.content}`); // Added to log content
+                        if (data.content) console.log(`Credential Content:\n${data.content}`);
+                    } else if (data.ack) {
+                        console.log('Backend Acknowledgement received.');
                     } else if (data.transcript) {
                         document.getElementById('transcription').innerText = `Transcription: ${data.transcript}`;
                         if (data.is_final) {
@@ -188,6 +193,7 @@ def index():
 @app.ws("/transcribe")
 async def transcribe(websocket: WebSocket):
     print("WebSocket accepted")
+    await websocket.send_json({"type": "ready"}) # Send ready signal
 
     # Ensure the client is available
     if not global_speech_client:
@@ -199,20 +205,24 @@ async def transcribe(websocket: WebSocket):
     async def request_generator():
         while True:
             try:
+                print("Backend: Waiting for WebSocket message...") # Added logging
                 message = await websocket.receive_json()
-                print(f"Backend received JSON message: {message}") # Added logging
+                print(f"Backend: Received WebSocket message: {message}") # Modified logging
+                
+                # Send acknowledgement to frontend
+                await websocket.send_json({"ack": True})
                 
                 # Temporarily disable sending to Google Speech API to test reception
-                # if "end_stream" in message and message["end_stream"]:
-                #     print("Backend received end_stream signal.") # Added logging
-                #     break
-                # 
-                # if "audio" in message:
-                #     decoded_chunk = base64.b64decode(message["audio"])
-                #     print(f"Received and decoded chunk of size: {len(decoded_chunk)}")
-                #     yield speech.StreamingRecognizeRequest(audio_content=decoded_chunk)
-                # else:
-                #     print("Received non-audio JSON message:", message)
+                if "end_stream" in message and message["end_stream"]:
+                    print("Backend received end_stream signal.") # Added logging
+                    break
+                
+                if "audio" in message:
+                    decoded_chunk = base64.b64decode(message["audio"])
+                    print(f"Received and decoded chunk of size: {len(decoded_chunk)}")
+                    yield speech.StreamingRecognizeRequest(audio_content=decoded_chunk)
+                else:
+                    print("Received non-audio JSON message:", message)
 
             except WebSocketDisconnect:
                 print("WebSocket disconnected cleanly from client.")
