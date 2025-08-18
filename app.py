@@ -10,7 +10,8 @@ import time
 import asyncio
 from google.cloud import speech
 
-ENABLE_GOOGLE_SPEECH = os.environ.get("ENABLE_GOOGLE_SPEECH", "false").lower() == "true"
+# Transcription is now controlled at runtime via Start/Stop Transcribe
+ENABLE_GOOGLE_SPEECH = True
 
 # --- Credentials Handling (START) ---
 credentials_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
@@ -48,7 +49,8 @@ global_speech_client = None
 global_recognition_config = None
 global_streaming_config = None
 
-if ENABLE_GOOGLE_SPEECH:
+# Initialize Google client if credentials are present; otherwise stay None and we will notify on demand
+if True:
     # Global Credentials Check and Client Initialization
     credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if credentials_path and os.path.exists(credentials_path):
@@ -71,8 +73,6 @@ if ENABLE_GOOGLE_SPEECH:
             print(f"Error initializing Google Cloud Speech client: {e}")
     else:
         print(f"Google Cloud credentials file not found or path not set: {credentials_path}")
-else:
-    print("Google Speech-to-Text functionality is disabled via ENABLE_GOOGLE_SPEECH environment variable.")
 
 @rt("/") # Main application route
 def index():
@@ -224,11 +224,14 @@ async def ws_test(websocket: WebSocket):
     async def stream_to_google_and_send_to_frontend():
         if not global_speech_client or not global_streaming_config:
             print("Backend: Google Speech client not initialized for streaming.")
-            await websocket.send_json({
-                "type": "transcript",
-                "transcript": "Google Speech-to-Text client not ready. Check server logs.",
-                "is_final": True
-            })
+            try:
+                await websocket.send_json({
+                    "type": "transcript",
+                    "transcript": "Transcribe is on but Google client is not ready (no credentials).",
+                    "is_final": True
+                })
+            except Exception:
+                pass
             return
         
         try:
