@@ -78,7 +78,6 @@ if True:
                 def mask(val):
                     if not val or len(val) < 8: return "***"
                     return f"{val[:4]}...{val[-4:]}"
-                global global_auth_info
                 global_auth_info = {
                     "project_id": project_id or "",
                     "client_email_masked": (client_email[:3] + "...@" + client_email.split("@")[-1]) if client_email and "@" in client_email else "***",
