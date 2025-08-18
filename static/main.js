@@ -65,8 +65,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // This is a hybrid approach. Let's send audio chunks via a new direct socket.
             
             // Re-establish direct WebSocket for MediaRecorder streaming for now
-            // HTMX handles initial connection, but we need raw access for binary data.
-            socket = new WebSocket(`ws://${window.location.host}/ws_test`);
+            // Use secure WSS when the page is served over HTTPS
+            const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            socket = new WebSocket(`${wsScheme}://${window.location.host}/ws_test`);
 
             socket.onopen = () => {
                 console.log('Frontend: Direct WebSocket opened to /ws_test for audio streaming.');
