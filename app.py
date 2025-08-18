@@ -100,6 +100,7 @@ def index():
                 };
 
                 socket.onmessage = event => {
+                    console.log('Frontend: Received WebSocket message:', event.data); # Added logging
                     const data = JSON.parse(event.data);
                     if (data.type === "ready") {
                         console.log('Backend ready signal received. Starting MediaRecorder.');
@@ -191,6 +192,7 @@ def index():
 async def transcribe(websocket: WebSocket):
     print("WebSocket accepted")
     await websocket.send_json({"type": "ready"}) # Send ready signal
+    print("Backend: Sent 'ready' signal.") # Added logging
 
     # Ensure the client is available
     if not global_speech_client:
