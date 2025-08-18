@@ -10,6 +10,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const stopRecordingButton = document.getElementById('stopRecording');
     const startTranscribeButton = document.getElementById('startTranscribe');
     const stopTranscribeButton = document.getElementById('stopTranscribe');
+    const authStatus = document.createElement('p');
+    authStatus.id = 'authStatus';
+    authStatus.innerText = '';
+    recordingsContainer.parentNode.insertBefore(authStatus, recordingsContainer);
     const transcriptionElement = document.getElementById('transcription');
     const recordingsContainer = document.getElementById('recordingsContainer');
     const toggleGoogleSpeechCheckbox = document.getElementById('toggleGoogleSpeech');
@@ -136,6 +140,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     } catch (_) {}
                 } else if (data.type === 'pong') {
                     connStatus.innerText = `WebSocket: pong (${data.ts})`;
+                } else if (data.type === 'auth') {
+                    const ready = !!data.ready;
+                    const info = data.info || {};
+                    const project = info.project_id || '';
+                    const email = info.client_email_masked || '';
+                    const key = info.private_key_id_masked || '';
+                    console.log('Frontend: Google auth status:', { ready, project, email, key });
+                    authStatus.innerText = ready ? `Google auth OK (project=${project}, email=${email}, key=${key})` : 'Google auth NOT READY';
                 } else if (data.type === 'ack') {
                     if (data.what === 'start') {
                         connStatus.innerText = 'WebSocket: start acknowledged';
@@ -218,6 +230,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Transcription control
     startTranscribeButton.addEventListener('click', () => {
         enableGoogleSpeech = true;
+        startTranscribeButton.disabled = true;
+        stopTranscribeButton.disabled = false;
+        startTranscribeButton.innerText = 'Transcribing...';
+        stopTranscribeButton.innerText = 'Stop Transcribe';
         try {
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({ type: 'transcribe', enabled: true }));
@@ -226,6 +242,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     stopTranscribeButton.addEventListener('click', () => {
         enableGoogleSpeech = false;
+        startTranscribeButton.disabled = false;
+        stopTranscribeButton.disabled = true;
+        startTranscribeButton.innerText = 'Start Transcribe';
+        stopTranscribeButton.innerText = 'Transcribe stopped';
         try {
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({ type: 'transcribe', enabled: false }));
