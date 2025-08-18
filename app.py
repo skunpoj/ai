@@ -5,18 +5,15 @@ import queue
 import time
 import base64
 import tempfile
-import json # Added for json.load
+import json
 
 # --- Credentials Handling (START) ---
 credentials_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 if credentials_json:
     try:
-        # Create a temporary file to store credentials
         fd, path = tempfile.mkstemp(suffix=".json")
         with os.fdopen(fd, 'w') as tmp:
             tmp.write(credentials_json)
-        
-        # Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
         print(f"Google Cloud credentials written to temporary file: {path}")
     except Exception as e:
@@ -25,16 +22,14 @@ else:
     print("GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable not found.")
 # --- Credentials Handling (END) ---
 
-# Audio recording parameters (from main.py - adjust as needed for web input)
+# Audio recording parameters
 STREAMING_LIMIT = 240000  # 4 minutes
 SAMPLE_RATE = 16000
 CHUNK_SIZE = int(SAMPLE_RATE / 10)  # 100ms
 
-
 def get_current_time() -> int:
     """Return Current Time in MS."""
     return int(round(time.time() * 1000))
-
 
 app, rt = fast_app(exts='ws') # Added exts='ws'
 
@@ -43,7 +38,7 @@ global_speech_client = None
 global_recognition_config = None
 global_streaming_config = None
 
-# Credentials Check and Send to Frontend (Global initialization)
+# Global Credentials Check and Client Initialization
 credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
 if credentials_path and os.path.exists(credentials_path):
     try:
@@ -54,8 +49,8 @@ if credentials_path and os.path.exists(credentials_path):
         global_speech_client = speech.SpeechClient()
         global_recognition_config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-        sample_rate_hertz=SAMPLE_RATE,
-        language_code="en-US",
+            sample_rate_hertz=SAMPLE_RATE,
+            language_code="en-US",
         )
         global_streaming_config = speech.StreamingRecognitionConfig(
             config=global_recognition_config, interim_results=True
@@ -65,7 +60,6 @@ if credentials_path and os.path.exists(credentials_path):
         print(f"Error initializing Google Cloud Speech client: {e}")
 else:
     print(f"Google Cloud credentials file not found or path not set: {credentials_path}")
-
 
 @rt("/")
 def index():
@@ -96,7 +90,7 @@ def index():
 
                 socket.onopen = () => {
                     console.log('WebSocket opened');
-                    // No longer call mediaRecorder.start() here. It will be called after 'ready' signal.
+                    // MediaRecorder.start() will be called only after 'ready' signal from backend
                 };
 
                 socket.onmessage = event => {
@@ -115,8 +109,7 @@ def index():
                     } else if (data.transcript) {
                         document.getElementById('transcription').innerText = `Transcription: ${data.transcript}`;
                         if (data.is_final) {
-                            // Only add final transcriptions to recordings
-                            recordings.push({ audioUrl: null, transcription: data.transcript }); // audioUrl will be set on stop
+                            recordings.push({ audioUrl: null, transcription: data.transcript });
                             displayRecordings();
                         }
                     }
@@ -153,12 +146,11 @@ def index():
                     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                     const audioUrl = URL.createObjectURL(audioBlob);
 
-                    // Update the last recording with the audio URL
                     if (recordings.length > 0) {
                         const lastRecording = recordings[recordings.length - 1];
-                        if (lastRecording.audioUrl === null) { // Only update if not already set
+                        if (lastRecording.audioUrl === null) {
                             lastRecording.audioUrl = audioUrl;
-                            displayRecordings(); // Re-render to show audio player
+                            displayRecordings();
                         }
                     }
                 };
@@ -174,7 +166,7 @@ def index():
 
             function displayRecordings() {
                 const container = document.getElementById('recordingsContainer');
-                container.innerHTML = ''; // Clear previous recordings
+                container.innerHTML = '';
                 recordings.forEach((record, index) => {
                     const recordDiv = document.createElement('div');
                     recordDiv.innerHTML = `
@@ -194,26 +186,22 @@ async def transcribe(websocket: WebSocket):
     await websocket.send_json({"type": "ready"}) # Send ready signal
     print("Backend: Sent 'ready' signal.") # Added logging
 
-    # Ensure the client is available
     if not global_speech_client:
         print("Error: Google Cloud Speech client not initialized.")
         await websocket.close(code=1011, reason="Google Speech client not ready.")
         return
 
-    # Create a generator for streaming audio requests
     async def request_generator():
         while True:
             try:
-                print("Backend: Waiting for WebSocket message...") # Added logging
+                print("Backend: Waiting for WebSocket message...")
                 message = await websocket.receive_json()
-                print(f"Backend: Received WebSocket message: {message}") # Modified logging
+                print(f"Backend: Received WebSocket message: {message}")
                 
-                # Send acknowledgement to frontend
                 await websocket.send_json({"ack": True})
                 
-                # Temporarily disable sending to Google Speech API to test reception
                 if "end_stream" in message and message["end_stream"]:
-                    print("Backend received end_stream signal.") # Added logging
+                    print("Backend received end_stream signal.")
                     break
                 
                 if "audio" in message:
@@ -227,33 +215,32 @@ async def transcribe(websocket: WebSocket):
                 print("WebSocket disconnected cleanly from client.")
                 break
             except Exception as e:
-                print(f"Error receiving or decoding chunk in request_generator: {e}") # Added logging
+                print(f"Error receiving or decoding chunk in request_generator: {e}")
                 break
 
     try:
         responses = global_speech_client.streaming_recognize(global_streaming_config, request_generator())
-        print("Receiving responses from Google Speech API...") # Added logging
+        print("Receiving responses from Google Speech API...")
         async for response in responses:
             if not response.results:
-                print("No transcription results in response.") # Added logging
+                print("No transcription results in response.")
                 continue
             
             result = response.results[0]
             if not result.alternatives:
-                print("No alternatives in transcription result.") # Added logging
+                print("No alternatives in transcription result.")
                 continue
             
             transcript = result.alternatives[0].transcript
             is_final = result.is_final
             
-            print(f"Sending transcription to frontend: {transcript} (Final: {is_final})") # Added logging
+            print(f"Sending transcription to frontend: {transcript} (Final: {is_final})")
             await websocket.send_json({"transcript": transcript, "is_final": is_final})
             
     except Exception as e:
-        print(f"WebSocket Error during streaming: {e}") # Modified logging
+        print(f"WebSocket Error during streaming: {e}")
     finally:
         print("WebSocket closed (backend)")
         await websocket.close()
-
 
 serve()
