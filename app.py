@@ -71,7 +71,7 @@ def index():
         P("Transcription: ", id="transcription"),\
         Div(id="recordingsContainer"),\
         Script(f"let CHUNK_SIZE = {CHUNK_SIZE};"),\
-        Script(open("static/script.js").read())
+        Script(src="/static/script.js")
 
 
 @app.ws("/transcribe")
