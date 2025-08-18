@@ -1,5 +1,6 @@
 import os
 from fasthtml.common import *
+from fastapi.staticfiles import StaticFiles # Re-added for static files
 from google.cloud import speech
 import queue
 import time
@@ -31,7 +32,8 @@ def get_current_time() -> int:
     """Return Current Time in MS."""
     return int(round(time.time() * 1000))
 
-app, rt = fast_app(exts='ws', static_path="static") # Added exts='ws' and static_path for serving static files
+app, rt = fast_app(exts='ws') # Added exts='ws'
+app.mount("/static", StaticFiles(directory="static")) # Mount static files
 
 # Configure Google Cloud Speech-to-Text client globally
 global_speech_client = None
