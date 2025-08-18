@@ -96,7 +96,10 @@ def index():
 
                 socket.onopen = () => {
                     console.log('WebSocket opened');
-                    mediaRecorder.start(CHUNK_SIZE); // Start recording and emit data every CHUNK_SIZE ms
+                    // Add a small delay to allow WebSocket to fully establish
+                    setTimeout(() => {
+                        mediaRecorder.start(CHUNK_SIZE); // Start recording and emit data every CHUNK_SIZE ms
+                    }, 100); // 100ms delay
                 };
 
                 socket.onmessage = event => {
@@ -198,16 +201,19 @@ async def transcribe(websocket: WebSocket):
             try:
                 message = await websocket.receive_json()
                 print(f"Backend received JSON message: {message}") # Added logging
-                if "end_stream" in message and message["end_stream"]:
-                    print("Backend received end_stream signal.") # Added logging
-                    break
                 
-                if "audio" in message:
-                    decoded_chunk = base64.b64decode(message["audio"])
-                    print(f"Received and decoded chunk of size: {len(decoded_chunk)}")
-                    yield speech.StreamingRecognizeRequest(audio_content=decoded_chunk)
-                else:
-                    print("Received non-audio JSON message:", message)
+                # Temporarily disable sending to Google Speech API to test reception
+                # if "end_stream" in message and message["end_stream"]:
+                #     print("Backend received end_stream signal.") # Added logging
+                #     break
+                # 
+                # if "audio" in message:
+                #     decoded_chunk = base64.b64decode(message["audio"])
+                #     print(f"Received and decoded chunk of size: {len(decoded_chunk)}")
+                #     yield speech.StreamingRecognizeRequest(audio_content=decoded_chunk)
+                # else:
+                #     print("Received non-audio JSON message:", message)
+
             except WebSocketDisconnect:
                 print("WebSocket disconnected cleanly from client.")
                 break
