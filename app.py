@@ -96,10 +96,7 @@ def index():
 
                 socket.onopen = () => {
                     console.log('WebSocket opened');
-                    // Add a small delay to allow WebSocket to fully establish
-                    setTimeout(() => {
-                        mediaRecorder.start(CHUNK_SIZE); // Start recording and emit data every CHUNK_SIZE ms
-                    }, 100); // 100ms delay
+                    // No longer call mediaRecorder.start() here. It will be called after 'ready' signal.
                 };
 
                 socket.onmessage = event => {
