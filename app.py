@@ -1,6 +1,5 @@
 import os
-from fasthtml.common import *
-from fastapi.staticfiles import StaticFiles # Re-added for static files
+from fasthtml.common import *, FileResponse
 from google.cloud import speech
 import queue
 import time
@@ -32,8 +31,7 @@ def get_current_time() -> int:
     """Return Current Time in MS."""
     return int(round(time.time() * 1000))
 
-app, rt = fast_app(exts='ws') # Added exts='ws'
-app.mount("/static", StaticFiles(directory="static")) # Mount static files
+app, rt = fast_app(exts='ws') # Reverted static_path and added exts='ws'
 
 # Configure Google Cloud Speech-to-Text client globally
 global_speech_client = None
@@ -138,5 +136,9 @@ async def transcribe(websocket: WebSocket):
     finally:
         print("WebSocket closed (backend)")
         await websocket.close()
+
+@app.get("/static/{filename:path}")
+async def static_files(filename: str):
+    return FileResponse(f"static/{filename}")
 
 serve()
