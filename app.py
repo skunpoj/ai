@@ -129,9 +129,12 @@ def index():
                     console.log('MediaRecorder mimeType:', mediaRecorder.mimeType);
                     audioChunks.push(event.data);
                     if (socket.readyState === WebSocket.OPEN) {
+                        console.log('Sending data. WebSocket readyState:', socket.readyState);
                         const arrayBuffer = await event.data.arrayBuffer();
                         const base64String = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
                         socket.send(JSON.stringify({ audio: base64String }));
+                    } else {
+                        console.warn('WebSocket not open. readyState:', socket.readyState, 'Not sending data.');
                     }
                 };
 
@@ -205,6 +208,9 @@ async def transcribe(websocket: WebSocket):
                     yield speech.StreamingRecognizeRequest(audio_content=decoded_chunk)
                 else:
                     print("Received non-audio JSON message:", message)
+            except WebSocketDisconnect:
+                print("WebSocket disconnected cleanly from client.")
+                break
             except Exception as e:
                 print(f"Error receiving or decoding chunk in request_generator: {e}") # Added logging
                 break
