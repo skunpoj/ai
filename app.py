@@ -69,7 +69,7 @@ def index():
         Button("Stop Recording", id="stopRecording", disabled=True),\
         P("Transcription: ", id="transcription"),\
         Div(id="recordingsContainer"),\
-        Script(f"let CHUNK_SIZE = {CHUNK_SIZE};"),\
+        Script("let CHUNK_SIZE = " + str(CHUNK_SIZE) + ";"),\
         Script("""
             let mediaRecorder;
             let audioChunks = [];
@@ -166,10 +166,7 @@ def index():
 
             function displayRecordings() {
                 const container = document.getElementById('recordingsContainer');
-                container.innerHTML = '';
-                recordings.forEach((record, index) => {
-                    const recordDiv = document.createElement('div');
-                    recordDiv.innerHTML = `
+                container.innerHTML = `
                         <h3>Recording ${index + 1}</h3>
                         ${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''}
                         <p>Transcription: ${record.transcription}</p>
