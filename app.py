@@ -48,6 +48,7 @@ def get_current_time() -> int:
 global_speech_client = None
 global_recognition_config = None
 global_streaming_config = None
+global_auth_info = None
 
 # Initialize Google client if credentials are present; otherwise stay None and we will notify on demand
 if True:
@@ -68,6 +69,23 @@ if True:
             global_streaming_config = speech.StreamingRecognitionConfig(
                 config=global_recognition_config, interim_results=True
             )
+            # Build redacted auth info for debugging
+            try:
+                creds_json = json.loads(creds_content)
+                client_email = creds_json.get("client_email")
+                private_key_id = creds_json.get("private_key_id")
+                project_id = creds_json.get("project_id")
+                def mask(val):
+                    if not val or len(val) < 8: return "***"
+                    return f"{val[:4]}...{val[-4:]}"
+                global global_auth_info
+                global_auth_info = {
+                    "project_id": project_id or "",
+                    "client_email_masked": (client_email[:3] + "...@" + client_email.split("@")[-1]) if client_email and "@" in client_email else "***",
+                    "private_key_id_masked": mask(private_key_id)
+                }
+            except Exception:
+                global_auth_info = None
             print(f"Google Cloud Speech client initialized successfully using credentials from: {credentials_path}")
         except Exception as e:
             print(f"Error initializing Google Cloud Speech client: {e}")
@@ -157,6 +175,17 @@ async def ws_test(websocket: WebSocket):
                         await websocket.send_json({"type": "ack", "what": "transcribe", "enabled": transcribe_enabled})
                     except Exception:
                         pass
+                    # Also send auth status when enabling
+                    if transcribe_enabled:
+                        status = {
+                            "type": "auth",
+                            "ready": bool(global_speech_client and global_streaming_config),
+                            "info": global_auth_info or {}
+                        }
+                        try:
+                            await websocket.send_json(status)
+                        except Exception:
+                            pass
                     continue
 
                 if "end_stream" in message and message["end_stream"]:
