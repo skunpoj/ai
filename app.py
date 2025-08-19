@@ -68,9 +68,10 @@ if True:
                 json.loads(creds_content) # Validate JSON content
             
             global_speech_client = speech.SpeechClient()
-            # Prefer OGG_OPUS for streaming compatibility
+            # Prefer OGG_OPUS for streaming; explicitly set sample rate (browser MediaRecorder is typically 48000)
             global_recognition_config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
+                sample_rate_hertz=48000,
                 language_code="en-US",
             )
             global_streaming_config = speech.StreamingRecognitionConfig(
@@ -296,6 +297,7 @@ async def ws_test(websocket: WebSocket):
                                         def do_recognize():
                                             cfg = speech.RecognitionConfig(
                                                 encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
+                                                sample_rate_hertz=48000,
                                                 language_code="en-US",
                                             )
                                             audio = speech.RecognitionAudio(content=chunk_bytes)
@@ -373,6 +375,10 @@ async def ws_test(websocket: WebSocket):
                         continue
                     transcript = result.alternatives[0].transcript
                     is_final = result.is_final
+                    try:
+                        print(f"Backend: transcript received (final={is_final}): {transcript}")
+                    except Exception:
+                        pass
                     try:
                         asyncio.run_coroutine_threadsafe(
                             websocket.send_json({
