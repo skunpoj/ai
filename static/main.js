@@ -73,14 +73,19 @@ document.addEventListener('DOMContentLoaded', () => {
             // The easiest way for raw audio is to get the socket directly if HTMX exposes it,
             // or send a JSON message via fetch to a different endpoint if needed.
 
-            // For this example, let's connect manually for MediaRecorder data,
-            // and use HTMX for initial UI and server responses.
-            // This is a hybrid approach. Let's send audio chunks via a new direct socket.
-            
-            // Re-establish direct WebSocket for MediaRecorder streaming for now
-            // Use secure WSS when the page is served over HTTPS
+            // Start recording immediately after we have the stream
+            try {
+                if (mediaRecorder.state !== 'recording') {
+                    mediaRecorder.start(CHUNK_MS);
+                    console.log('Frontend: MediaRecorder started immediately with CHUNK_MS:', CHUNK_MS);
+                }
+            } catch (e) {
+                console.warn('Frontend: Immediate start failed (pre-socket):', e);
+            }
+
+            // Connect WebSocket for streaming chunks
             const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-            socket = new WebSocket(`${wsScheme}://${window.location.host}/ws_test`);
+            socket = new WebSocket(`${wsScheme}://${window.location.host}/ws_stream`);
 
             socket.onopen = () => {
                 console.log('Frontend: Direct WebSocket opened to /ws_test for audio streaming.');
@@ -94,8 +99,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
-
-                // Removed safety timer to avoid double-starts
+                // Recording already started pre-socket; keep guard in case of rare race
+                try {
+                    if (mediaRecorder && mediaRecorder.state !== 'recording') {
+                        mediaRecorder.start(CHUNK_MS);
+                        console.log('Frontend: MediaRecorder started on socket open with CHUNK_MS:', CHUNK_MS);
+                    }
+                } catch (e) {
+                    console.warn('Frontend: Immediate start on open failed:', e);
+                }
             };
 
             socket.onmessage = event => {
@@ -104,26 +116,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     data = JSON.parse(event.data);
                 } catch (e) {
-                    // Some servers may send plain strings; treat 'ready' explicitly
-                    if (typeof event.data === 'string' && event.data.toLowerCase().includes('ready')) {
-                        console.log('Frontend: Plain ready message received. Starting MediaRecorder.');
-                        mediaRecorder.start(CHUNK_MS);
-                        console.log('Frontend: MediaRecorder started with CHUNK_MS:', CHUNK_MS);
-                        return;
-                    }
+                    // Ignore plain-text messages to avoid double starts
                     console.warn('Frontend: Non-JSON message received and ignored.');
                     return;
                 }
                 console.log('Frontend: Parsed WebSocket data:', data);
 
                 if (data.type === "ready") {
-                    console.log('Frontend: Backend ready signal received. Starting MediaRecorder.');
-                    if (mediaRecorder.state !== 'recording') {
-                        mediaRecorder.start(CHUNK_MS); // Start recording only after ready signal
-                    } else {
-                        console.log('Frontend: MediaRecorder already recording; skip start.');
-                    }
-                    console.log('Frontend: MediaRecorder started with CHUNK_MS:', CHUNK_MS);
+                    console.log('Frontend: Backend ready signal received. Recorder status:', mediaRecorder.state);
                     try {
                         socket.send(JSON.stringify({ type: 'ping_start' }));
                         console.log('Frontend: Sent ping_start.');
