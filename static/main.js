@@ -95,17 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
 
-                // Safety timer: start recorder if 'ready' not received within 1s
-                setTimeout(() => {
-                    if (mediaRecorder && mediaRecorder.state !== 'recording') {
-                        try {
-                            mediaRecorder.start(CHUNK_MS);
-                            console.log('Frontend: Safety start MediaRecorder with CHUNK_MS:', CHUNK_MS);
-                        } catch (e) {
-                            console.warn('Frontend: Safety start failed:', e);
-                        }
-                    }
-                }, 1000);
+                // Removed safety timer to avoid double-starts
             };
 
             socket.onmessage = event => {
@@ -128,7 +118,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (data.type === "ready") {
                     console.log('Frontend: Backend ready signal received. Starting MediaRecorder.');
-                    mediaRecorder.start(CHUNK_MS); // Start recording only after ready signal
+                    if (mediaRecorder.state !== 'recording') {
+                        mediaRecorder.start(CHUNK_MS); // Start recording only after ready signal
+                    } else {
+                        console.log('Frontend: MediaRecorder already recording; skip start.');
+                    }
                     console.log('Frontend: MediaRecorder started with CHUNK_MS:', CHUNK_MS);
                     try {
                         socket.send(JSON.stringify({ type: 'ping_start' }));
@@ -214,6 +208,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert('WebSocket connection error. See console for details.');
             };
 
+            function arrayBufferToBase64(buffer) {
+                const bytes = new Uint8Array(buffer);
+                const chunkSize = 0x8000; // 32KB
+                const chunks = [];
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                    const sub = bytes.subarray(i, i + chunkSize);
+                    chunks.push(String.fromCharCode.apply(null, sub));
+                }
+                return btoa(chunks.join(''));
+            }
+
             mediaRecorder.ondataavailable = async event => {
                 console.log('Frontend: Data available:', event.data.size, 'bytes');
                 console.log('Frontend: MediaRecorder mimeType:', mediaRecorder.mimeType);
@@ -221,8 +226,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log('Frontend: Current audioChunks length:', audioChunks.length);
                 if (socket.readyState === WebSocket.OPEN) {
                     console.log('Frontend: Sending audio data. WebSocket readyState:', socket.readyState, 'Chunk size:', event.data.size);
-                    const arrayBuffer = await event.data.arrayBuffer();
-                    socket.send(JSON.stringify({ audio: btoa(String.fromCharCode(...new Uint8Array(arrayBuffer))), enable_google_speech: enableGoogleSpeech }));
+                    try {
+                        const arrayBuffer = await event.data.arrayBuffer();
+                        const b64 = arrayBufferToBase64(arrayBuffer);
+                        socket.send(JSON.stringify({ audio: b64, enable_google_speech: enableGoogleSpeech }));
+                    } catch (e) {
+                        console.error('Frontend: Failed to convert/send chunk:', e);
+                    }
                 } else {
                     console.warn('Frontend: WebSocket not open. readyState:', socket.readyState, 'Not sending data.');
                 }
