@@ -5,6 +5,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let recordings = []; // Array to store recorded audios and their transcriptions
     let currentRecording = null; // Single recording per Start/Stop session
     let savedCloseTimer = null; // Delay socket close until server confirms save
+    // Ensure this flag is in the outer scope so UI buttons can toggle it reliably
+    let enableGoogleSpeech = false;
 
     const startRecordingButton = document.getElementById('startRecording');
     const stopRecordingButton = document.getElementById('stopRecording');
@@ -55,8 +57,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         console.log("Frontend: Start Recording button clicked.");
 
-        // Transcription control is now via buttons; default off at start
-        let enableGoogleSpeech = false;
+        // Transcription control is via buttons; default off at start
+        enableGoogleSpeech = false;
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });

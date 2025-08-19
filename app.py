@@ -34,6 +34,8 @@ else:
 
 # Audio recording parameters
 STREAMING_LIMIT = 240000  # 4 minutes
+# For browser MediaRecorder with Opus, actual sample rate is typically 48000 and
+# embedded in the container. We avoid forcing a mismatched sample_rate here.
 SAMPLE_RATE = 16000
 CHUNK_SIZE = int(SAMPLE_RATE / 10)  # 100ms worth of audio frames for backend processing
 CHUNK_MS = 250  # MediaRecorder timeslice in ms for frontend
@@ -65,9 +67,9 @@ if True:
                 json.loads(creds_content) # Validate JSON content
             
             global_speech_client = speech.SpeechClient()
+            # For WEBM_OPUS, do not force sample_rate_hertz; the container carries it (usually 48000).
             global_recognition_config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-                sample_rate_hertz=SAMPLE_RATE,
                 language_code="en-US",
             )
             global_streaming_config = speech.StreamingRecognitionConfig(
@@ -141,8 +143,9 @@ async def ws_test(websocket: WebSocket):
         print(f"Backend: Failed to send 'ready' (client likely disconnected): {e}")
         return
 
-    # Use a queue to buffer audio chunks for Google Speech API
-    audio_queue = asyncio.Queue()
+    # Queues to buffer audio chunks for Google Speech API
+    # Use a standard Queue for the Google streaming call (which is synchronous)
+    requests_q = queue.Queue()
 
     # Prepare server-side recording file under static so it can be fetched later
     recordings_dir = os.path.join("static", "recordings")
@@ -223,7 +226,7 @@ async def ws_test(websocket: WebSocket):
                     else:
                         # Stop streaming by sending sentinel
                         try:
-                            await audio_queue.put(None)
+                            requests_q.put(None)
                         except Exception:
                             pass
                         stream_started = False
@@ -233,7 +236,10 @@ async def ws_test(websocket: WebSocket):
                 if "end_stream" in message and message["end_stream"]:
                     print("Backend: Received end_stream signal from client.")
                     # Signal end of stream to consumer (Google API)
-                    await audio_queue.put(None) # Sentinel to stop consuming
+                    try:
+                        requests_q.put(None) # Sentinel to stop consuming
+                    except Exception:
+                        pass
                     try:
                         if not server_file.closed:
                             server_file.flush()
@@ -278,7 +284,6 @@ async def ws_test(websocket: WebSocket):
                                         def do_recognize():
                                             cfg = speech.RecognitionConfig(
                                                 encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-                                                sample_rate_hertz=SAMPLE_RATE,
                                                 language_code="en-US",
                                             )
                                             audio = speech.RecognitionAudio(content=chunk_bytes)
@@ -298,7 +303,10 @@ async def ws_test(websocket: WebSocket):
                                 print(f"Backend: Failed to schedule per-chunk transcription: {e}")
                         # Also forward bytes to streaming recognizer if active
                         if enable_google_speech and stream_started:
-                            await audio_queue.put(decoded_chunk)
+                            try:
+                                requests_q.put(decoded_chunk)
+                            except Exception:
+                                pass
                         chunk_index += 1
                     except Exception as e:
                         print(f"Backend: Error decoding/writing audio chunk: {e}")
@@ -323,47 +331,50 @@ async def ws_test(websocket: WebSocket):
         if not global_speech_client or not global_streaming_config:
             print("Backend: Google Speech client not initialized for streaming.")
             return
-        
-        try:
-            # Generator for Google Speech API requests
-            async def request_generator():
-                while True:
-                    chunk = await audio_queue.get()
-                    if chunk is None: # Sentinel for end of stream
-                        print("Backend: Audio queue sentinel received, ending request_generator.")
+
+        loop = asyncio.get_running_loop()
+
+        def request_generator_sync():
+            while True:
+                item = requests_q.get()
+                if item is None:
+                    print("Backend: requests_q sentinel received, ending request_generator_sync.")
+                    break
+                yield speech.StreamingRecognizeRequest(audio_content=item)
+
+        def run_streaming_blocking():
+            try:
+                print("Backend: Starting Google Speech streaming recognition (thread).")
+                responses = global_speech_client.streaming_recognize(global_streaming_config, request_generator_sync())
+                for response in responses:
+                    if not response.results:
+                        continue
+                    result = response.results[0]
+                    if not result.alternatives:
+                        continue
+                    transcript = result.alternatives[0].transcript
+                    is_final = result.is_final
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            websocket.send_json({
+                                "type": "transcript",
+                                "transcript": transcript,
+                                "is_final": is_final
+                            }),
+                            loop
+                        )
+                    except Exception as e:
+                        print(f"Backend: Failed to schedule transcript send: {e}")
                         break
-                    yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            except Exception as e:
+                print(f"Backend: Error in run_streaming_blocking: {e}")
+            finally:
+                print("Backend: streaming recognition thread ended.")
 
-            print("Backend: Starting Google Speech streaming recognition.")
-            responses = global_speech_client.streaming_recognize(global_streaming_config, request_generator())
-
-            async for response in responses:
-                if not response.results:
-                    # print("Backend: No transcription results in response.") # Too verbose
-                    continue
-                
-                result = response.results[0]
-                if not result.alternatives:
-                    # print("Backend: No alternatives in transcription result.") # Too verbose
-                    continue
-                
-                transcript = result.alternatives[0].transcript
-                is_final = result.is_final
-                
-                # Send transcription to frontend as JSON for direct WebSocket handling
-                try:
-                    await websocket.send_json({
-                        "type": "transcript",
-                        "transcript": transcript,
-                        "is_final": is_final
-                    })
-                except Exception as e:
-                    print(f"Backend: Failed to send transcript (client likely disconnected): {e}")
-                    return
-                # print(f"Backend: Sent transcription to frontend: {transcript} (Final: {is_final})") # Too verbose
-
+        try:
+            await loop.run_in_executor(None, run_streaming_blocking)
         except Exception as e:
-            print(f"Backend: Error in stream_to_google_and_send_to_frontend: {e}")
+            print(f"Backend: Error awaiting streaming executor: {e}")
         finally:
             print("Backend: stream_to_google_and_send_to_frontend task ended.")
 
