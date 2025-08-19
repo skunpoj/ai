@@ -7,10 +7,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let savedCloseTimer = null; // Delay socket close until server confirms save
     // Ensure this flag is in the outer scope so UI buttons can toggle it reliably
     let enableGoogleSpeech = false;
-    // Buffer client-side chunks into longer segments for playback
+    // Segment timing
     let segmentBuffer = [];
-    let lastChunkBlob = null; // 1 timeslice overlap to improve segment continuity
-    let segmentStartTs = null;
+    let lastChunkBlob = null; // unused in timeslice mode
+    let segmentStartTs = null; // unused in timeslice mode
+    let segmentRotate = false; // when true, onstop restarts recorder with new timeslice
 
     const startRecordingButton = document.getElementById('startRecording');
     const stopRecordingButton = document.getElementById('stopRecording');
@@ -71,8 +72,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!Number.isNaN(v) && v >= 5000 && v <= 150000) {
                     segmentMs = v;
                     console.log('Frontend: segmentMs updated via radio:', segmentMs);
-                    segmentBuffer = [];
-                    segmentStartTs = null;
+                    // If currently recording, rotate MediaRecorder to apply new timeslice
+                    try {
+                        if (mediaRecorder && mediaRecorder.state === 'recording') {
+                            segmentRotate = true;
+                            mediaRecorder.stop();
+                        }
+                    } catch(_) {}
                 }
             });
         });
@@ -155,8 +161,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
-                // Start the recorder now that socket is open
-                try { mediaRecorder.start(CHUNK_MS); console.log('Frontend: MediaRecorder started with CHUNK_MS after socket open:', CHUNK_MS); } catch (e) { console.warn('Frontend: start on open failed:', e); }
+                // Start the recorder now that socket is open; use segmentMs as timeslice so each blob is a standalone segment
+                try { mediaRecorder.start(segmentMs); console.log('Frontend: MediaRecorder started with segmentMs:', segmentMs); } catch (e) { console.warn('Frontend: start on open failed:', e); }
             };
 
             socket.onmessage = event => {
@@ -325,80 +331,41 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             mediaRecorder.ondataavailable = async event => {
-                console.log('Frontend: Data available:', event.data.size, 'bytes');
-                console.log('Frontend: MediaRecorder mimeType:', mediaRecorder.mimeType);
-                if (event.data && event.data.size > 0) {
-                    audioChunks.push(event.data);
+                // Each event is a complete, standalone segment because we pass segmentMs to start()
+                if (!event.data || event.data.size === 0) return;
+                console.log('Frontend: Segment available:', event.data.size, 'bytes');
+                const segBlob = event.data;
+                const ts = Date.now();
+                let segList = document.getElementById('segmentList');
+                if (!segList) {
+                    segList = document.createElement('div');
+                    segList.id = 'segmentList';
+                    (segmentContainer || recordingsContainer).appendChild(segList);
                 }
-                console.log('Frontend: Current audioChunks length:', audioChunks.length);
-                // Client-side segmenting for better playback experience
-                const now = Date.now();
-                if (segmentStartTs === null) segmentStartTs = now;
-                if (event.data && event.data.size > 0) {
-                    segmentBuffer.push(event.data);
-                    lastChunkBlob = event.data;
-                }
-                if (now - segmentStartTs >= segmentMs) {
-                    try {
-                        const segBlob = new Blob(segmentBuffer, { type: recMimeType || (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm;codecs=opus' });
-                        console.log('Frontend: Built segment blob size(bytes)=', segBlob.size, 'type=', segBlob.type);
-                        let segList = document.getElementById('segmentList');
-                        if (!segList) {
-                            segList = document.createElement('div');
-                            segList.id = 'segmentList';
-                            (segmentContainer || recordingsContainer).appendChild(segList);
-                        }
-                        const ts = Date.now();
-                        const entry = document.createElement('div');
-                        entry.id = `segment-${ts}`;
-                        entry.textContent = `${new Date(ts).toLocaleTimeString()} — uploading...`;
-                        segList.appendChild(entry);
-                        // Also upload the segment to server so it is playable from server
-                        if (socket.readyState === WebSocket.OPEN) {
-                            const arrayBuffer = await segBlob.arrayBuffer();
-                            const b64seg = arrayBufferToBase64(arrayBuffer);
-                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts, mime: segBlob.type }));
-                        }
-                    } catch (e) { console.warn('Frontend: failed to create/send segment blob', e); }
-                    segmentBuffer = lastChunkBlob ? [lastChunkBlob] : [];
-                    segmentStartTs = now;
-                }
-                // Do not send per-chunk audio anymore; we only stream PCM and post full segments
+                const entry = document.createElement('div');
+                entry.id = `segment-${ts}`;
+                entry.textContent = `${new Date(ts).toLocaleTimeString()} — uploading...`;
+                segList.appendChild(entry);
+                try {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        const arrayBuffer = await segBlob.arrayBuffer();
+                        const b64seg = arrayBufferToBase64(arrayBuffer);
+                        socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts, mime: segBlob.type }));
+                    }
+                } catch (e) { console.warn('Frontend: failed to send segment blob', e); }
             };
 
             mediaRecorder.onstop = async () => {
-                console.log('Frontend: MediaRecorder stopped. Finalizing audio.');
-                // Flush remaining segment buffer as a playable segment
-                if (segmentBuffer.length) {
-                    try {
-                        const segBlob = new Blob(segmentBuffer, { type: recMimeType || (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm;codecs=opus' });
-                        console.log('Frontend: Final segment blob size(bytes)=', segBlob.size, 'type=', segBlob.type);
-                        let segList = document.getElementById('segmentList');
-                        if (!segList) {
-                            segList = document.createElement('div');
-                            segList.id = 'segmentList';
-                            recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
-                        }
-                        const ts = Date.now();
-                        const entry = document.createElement('div');
-                        entry.id = `segment-${ts}`;
-                        entry.textContent = `${new Date(ts).toLocaleTimeString()} — uploading...`;
-                        segList.appendChild(entry);
-                        // Upload final segment to server
-                        if (socket.readyState === WebSocket.OPEN) {
-                            const arrayBuffer = await segBlob.arrayBuffer();
-                            const b64seg = arrayBufferToBase64(arrayBuffer);
-                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts, mime: segBlob.type }));
-                        }
-                    } catch (e) { console.warn('Frontend: failed to flush segment', e); }
-                    segmentBuffer = [];
-                    segmentStartTs = null;
-                    lastChunkBlob = null;
+                console.log('Frontend: MediaRecorder stopped.');
+                if (segmentRotate) {
+                    segmentRotate = false;
+                    // Restart with new segmentMs timeslice
+                    try { mediaRecorder.start(segmentMs); console.log('Frontend: MediaRecorder restarted with segmentMs:', segmentMs); } catch (e) { console.warn('Frontend: restart failed:', e); }
+                    return;
                 }
                 if (socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({ type: 'ping_stop' }));
-                    socket.send(JSON.stringify({ end_stream: true })); // Send end signal as JSON
-                    // Give server time to respond with 'saved' before closing
+                    socket.send(JSON.stringify({ end_stream: true }));
                     savedCloseTimer = setTimeout(() => {
                         try {
                             if (socket && socket.readyState === WebSocket.OPEN) socket.close();
@@ -406,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }, 1500);
                 }
 
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                const audioBlob = new Blob(audioChunks, { type: recMimeType || 'audio/webm' });
                 const audioUrl = URL.createObjectURL(audioBlob);
                 console.log('Frontend: Generated audio URL:', audioUrl);
 
