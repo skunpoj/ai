@@ -88,24 +88,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const options = (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(preferredType)) ? { mimeType: preferredType } : {};
             mediaRecorder = new MediaRecorder(stream, options);
             audioChunks = [];
-            
-            // WebSocket connection is managed by HTMX on the hx-ext="ws" element.
-            // To send data from JavaScript, we can either get the raw WebSocket object
-            // from HTMX, or trigger an HTMX element to send.
-            // The easiest way for raw audio is to get the socket directly if HTMX exposes it,
-            // or send a JSON message via fetch to a different endpoint if needed.
 
-            // Start recording immediately after we have the stream
-            try {
-                if (mediaRecorder.state !== 'recording') {
-                    mediaRecorder.start(CHUNK_MS);
-                    console.log('Frontend: MediaRecorder started immediately with CHUNK_MS:', CHUNK_MS);
-                }
-            } catch (e) {
-                console.warn('Frontend: Immediate start failed (pre-socket):', e);
-            }
-
-            // Connect WebSocket for streaming chunks
+            // Connect WebSocket for streaming chunks BEFORE starting recorder to avoid sending to closed socket
             const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
             socket = new WebSocket(`${wsScheme}://${window.location.host}/ws_stream`);
 
@@ -121,15 +105,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
-                // Recording already started pre-socket; keep guard in case of rare race
-                try {
-                    if (mediaRecorder && mediaRecorder.state !== 'recording') {
-                        mediaRecorder.start(CHUNK_MS);
-                        console.log('Frontend: MediaRecorder started on socket open with CHUNK_MS:', CHUNK_MS);
-                    }
-                } catch (e) {
-                    console.warn('Frontend: Immediate start on open failed:', e);
-                }
+                // Start the recorder now that socket is open
+                try { mediaRecorder.start(CHUNK_MS); console.log('Frontend: MediaRecorder started with CHUNK_MS after socket open:', CHUNK_MS); } catch (e) { console.warn('Frontend: start on open failed:', e); }
             };
 
             socket.onmessage = event => {
@@ -165,14 +142,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (lastChunk) lastChunk.textContent = ` — ${data.transcript}`;
                     }
                 } else if (data.type === 'chunk_saved') {
+                    // Render chunk list below segment list
                     console.log('Frontend: Server saved chunk:', data);
                     const idx = data.idx;
+                    let segList = document.getElementById('segmentList');
                     let chunkList = document.getElementById('chunkList');
                     if (!chunkList) {
                         chunkList = document.createElement('div');
                         chunkList.id = 'chunkList';
-                        recordingsContainer.parentNode.insertBefore(chunkList, recordingsContainer);
-                        // Ensure inline flow of chunk labels
+                        if (segList && segList.parentNode) segList.parentNode.insertBefore(chunkList, segList.nextSibling);
+                        else recordingsContainer.parentNode.insertBefore(chunkList, recordingsContainer);
                         chunkList.style.display = 'flex';
                         chunkList.style.flexWrap = 'wrap';
                         chunkList.style.gap = '8px';
@@ -293,7 +272,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (socket.readyState === WebSocket.OPEN) {
                             const arrayBuffer = await segBlob.arrayBuffer();
                             const b64seg = arrayBufferToBase64(arrayBuffer);
-                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg }));
+                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: idx }));
                         }
                     } catch (e) { console.warn('Frontend: failed to create/send segment blob', e); }
                     segmentBuffer = [];
@@ -334,7 +313,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (socket.readyState === WebSocket.OPEN) {
                             const arrayBuffer = await segBlob.arrayBuffer();
                             const b64seg = arrayBufferToBase64(arrayBuffer);
-                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg }));
+                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: idx }));
                         }
                     } catch (e) { console.warn('Frontend: failed to flush segment', e); }
                     segmentBuffer = [];
