@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let recordings = []; // Array of {audioUrl, serverUrl, startTs, stopTs, durationMs, transcripts}
     let currentRecording = null; // Active recording object
     let recordStartTs = null;
+    const seenTxKeys = new Set(); // dedupe transcript lines across duplicate events
     let savedCloseTimer = null; // Delay socket close until server confirms save
     // Ensure this flag is in the outer scope so UI buttons can toggle it reliably
     let enableGoogleSpeech = false;
@@ -30,6 +31,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const segmentModal = document.getElementById('segmentModal');
     const closeSegmentModalBtn = document.getElementById('closeSegmentModal');
     const fullTranscriptContainer = document.getElementById('fullTranscriptContainer');
+    // Recorder rotation helpers
+    let currentStream = null;
+    let recOptions = {};
+    let recMimeType = '';
+    let segmentTimerId = null;
     
     // Add a connection status and test button UI elements if not present
     let connStatus = document.getElementById('connStatus');
@@ -93,7 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
         startTranscribeButton.disabled = false; // allow transcribe only during recording
         stopTranscribeButton.disabled = true;
         transcriptionElement.innerText = "Transcription: ";
-        if (fullContainer) fullContainer.innerHTML = '';
+        // Do NOT clear previous full recordings; keep history visible
         if (segmentContainer) segmentContainer.innerHTML = '';
         if (chunkContainer) chunkContainer.innerHTML = '';
         if (liveTranscriptContainer) liveTranscriptContainer.innerHTML = '';
@@ -105,21 +111,22 @@ document.addEventListener('DOMContentLoaded', () => {
         recordStartTs = Date.now();
 
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1, sampleRate: 48000 } });
             // Prefer WebM Opus for widest browser support; fallback to OGG Opus
             const preferredTypes = [
                 'audio/webm;codecs=opus',
                 'audio/webm',
                 'audio/ogg;codecs=opus'
             ];
-            let recOptions = {};
-            let recMimeType = '';
+            recOptions = {};
+            recMimeType = '';
             if (window.MediaRecorder && MediaRecorder.isTypeSupported) {
                 for (const t of preferredTypes) {
                     if (MediaRecorder.isTypeSupported(t)) { recOptions = { mimeType: t }; recMimeType = t; break; }
                 }
             }
-            mediaRecorder = new MediaRecorder(stream, recOptions);
+            currentStream = stream;
+            mediaRecorder = new MediaRecorder(currentStream, recOptions);
             audioChunks = [];
 
             // Build a WebAudio graph to gather 16kHz mono PCM for LINEAR16 streaming
@@ -164,8 +171,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
-                // Start the recorder now that socket is open; use segmentMs as timeslice so each blob is a standalone segment
-                try { mediaRecorder.start(segmentMs); console.log('Frontend: MediaRecorder started with segmentMs:', segmentMs); } catch (e) { console.warn('Frontend: start on open failed:', e); }
+                // Start a continuous recorder without built-in timeslice; manual segmentation with timer ensures fresh container headers
+                try { mediaRecorder.start(); console.log('Frontend: MediaRecorder started (continuous).'); } catch (e) { console.warn('Frontend: start on open failed:', e); }
+                // Manual segmentation timer
+                try { if (segmentTimerId) clearInterval(segmentTimerId); } catch(_) {}
+                segmentTimerId = setInterval(async () => {
+                    if (!mediaRecorder || mediaRecorder.state !== 'recording') return;
+                    try { mediaRecorder.requestData(); } catch(_) {}
+                }, segmentMs);
             };
 
             socket.onmessage = event => {
@@ -247,6 +260,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 } else if (data.type === 'segment_transcript' || data.type === 'segment_transcript_google') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
+                    const key = `google:${idx}:${data.transcript || ''}`;
+                    if (seenTxKeys.has(key)) return;
+                    seenTxKeys.add(key);
                     const list = document.getElementById(`segment-tx-list-${idx}`);
                     if (list) {
                         const row = document.createElement('div');
@@ -256,6 +272,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (currentRecording) { currentRecording.transcripts.google.push(data.transcript || ''); displayRecordings(); }
                 } else if (data.type === 'segment_transcript_vertex') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
+                    const key = `vertex:${idx}:${data.transcript || ''}`;
+                    if (seenTxKeys.has(key)) return;
+                    seenTxKeys.add(key);
                     const list = document.getElementById(`segment-tx-list-${idx}`);
                     if (list) {
                         const row = document.createElement('div');
@@ -265,6 +284,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (currentRecording) { currentRecording.transcripts.vertex.push(data.transcript || ''); displayRecordings(); }
                 } else if (data.type === 'segment_transcript_gemini') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
+                    const key = `gemini:${idx}:${data.transcript || ''}`;
+                    if (seenTxKeys.has(key)) return;
+                    seenTxKeys.add(key);
                     const list = document.getElementById(`segment-tx-list-${idx}`);
                     if (list) {
                         const row = document.createElement('div');
@@ -330,7 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             mediaRecorder.ondataavailable = async event => {
-                // Each event is a complete, standalone segment because we pass segmentMs to start()
+                // Each event is a complete, standalone segment because we either ran with timeslice earlier or requestData() timer now
                 if (!event.data || event.data.size === 0) return;
                 console.log('Frontend: Segment available:', event.data.size, 'bytes');
                 const segBlob = event.data;
@@ -356,10 +378,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
             mediaRecorder.onstop = async () => {
                 console.log('Frontend: MediaRecorder stopped.');
+                try { if (segmentTimerId) clearInterval(segmentTimerId); } catch(_) {}
+                segmentTimerId = null;
                 if (segmentRotate) {
                     segmentRotate = false;
                     // Restart with new segmentMs timeslice
-                    try { mediaRecorder.start(segmentMs); console.log('Frontend: MediaRecorder restarted with segmentMs:', segmentMs); } catch (e) { console.warn('Frontend: restart failed:', e); }
+                    try {
+                        mediaRecorder = new MediaRecorder(currentStream, recOptions);
+                        mediaRecorder.ondataavailable = arguments.callee.bind(null); // preserve handler
+                        mediaRecorder.start();
+                        console.log('Frontend: MediaRecorder restarted (continuous).');
+                        try { if (segmentTimerId) clearInterval(segmentTimerId); } catch(_) {}
+                        segmentTimerId = setInterval(() => { try { mediaRecorder.requestData(); } catch(_) {} }, segmentMs);
+                    } catch (e) { console.warn('Frontend: restart failed:', e); }
                     return;
                 }
                 const stopTs = Date.now();
