@@ -123,7 +123,18 @@ def index():
                 Input(type="range", id="segmentMsInput", min="1000", max="10000", value=str(SEGMENT_MS), step="250"),
                 Span(str(SEGMENT_MS), id="segmentMsValue"),
             ),
-            Div(id="recordingsContainer"),
+            Div(
+                H2("Full Recording"),
+                Div(id="fullContainer")
+            ),
+            Div(
+                H2("Segments"),
+                Div(id="segmentContainer")
+            ),
+            Div(
+                H2("Chunks"),
+                Div(id="chunkContainer")
+            ),
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
             Script(f"let SEGMENT_MS = {SEGMENT_MS};"),
             Script("window.SEGMENT_MS = SEGMENT_MS;"),

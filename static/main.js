@@ -17,6 +17,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const stopTranscribeButton = document.getElementById('stopTranscribe');
     const transcriptionElement = document.getElementById('transcription');
     const recordingsContainer = document.getElementById('recordingsContainer');
+    const fullContainer = document.getElementById('fullContainer') || recordingsContainer;
+    const segmentContainer = document.getElementById('segmentContainer') || recordingsContainer;
+    const chunkContainer = document.getElementById('chunkContainer') || recordingsContainer;
     const toggleGoogleSpeechCheckbox = document.getElementById('toggleGoogleSpeech');
     const segmentMsInput = document.getElementById('segmentMsInput');
     const segmentMsValue = document.getElementById('segmentMsValue');
@@ -75,7 +78,9 @@ document.addEventListener('DOMContentLoaded', () => {
         startTranscribeButton.disabled = false; // allow transcribe only during recording
         stopTranscribeButton.disabled = true;
         transcriptionElement.innerText = "Transcription: ";
-        recordingsContainer.innerHTML = ''; // Clear previous recordings on new start
+        if (fullContainer) fullContainer.innerHTML = '';
+        if (segmentContainer) segmentContainer.innerHTML = '';
+        if (chunkContainer) chunkContainer.innerHTML = '';
 
         console.log("Frontend: Start Recording button clicked.");
 
@@ -145,8 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!chunkList) {
                         chunkList = document.createElement('div');
                         chunkList.id = 'chunkList';
-                        if (segList && segList.parentNode) segList.parentNode.insertBefore(chunkList, segList.nextSibling);
-                        else recordingsContainer.parentNode.insertBefore(chunkList, recordingsContainer);
+                        (chunkContainer || recordingsContainer).appendChild(chunkList);
                         chunkList.style.display = 'flex';
                         chunkList.style.flexWrap = 'wrap';
                         chunkList.style.gap = '8px';
@@ -165,7 +169,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!segList) {
                         segList = document.createElement('div');
                         segList.id = 'segmentList';
-                        recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
+                        (segmentContainer || recordingsContainer).appendChild(segList);
                     }
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const existing = document.getElementById(`segment-${idx}`);
@@ -257,7 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (!segList) {
                             segList = document.createElement('div');
                             segList.id = 'segmentList';
-                            recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
+                            (segmentContainer || recordingsContainer).appendChild(segList);
                         }
                         const idx = segList.childElementCount;
                         const entry = document.createElement('div');
@@ -403,7 +407,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function displayRecordings() {
         console.log('Frontend: Displaying recordings. Current recordings array:', recordings);
-        recordingsContainer.innerHTML = ''; // Clear existing displayed recordings
+        if (fullContainer) fullContainer.innerHTML = '';
 
         recordings.forEach((record, index) => {
             const recordDiv = document.createElement('div');
@@ -415,7 +419,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <p>Transcription: ${record.transcription}</p>
                 <hr/>
             `;
-            recordingsContainer.appendChild(recordDiv);
+            (fullContainer || recordingsContainer).appendChild(recordDiv);
         });
     }
 
