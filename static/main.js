@@ -186,18 +186,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     const el = document.getElementById(`chunk-tx-${data.idx}`);
                     if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : '';
                 } else if (data.type === 'segment_saved') {
-                    // Render server-hosted playable audio for the saved segment
-                    let segList = document.getElementById('chunkList');
+                    // Render single server-hosted playable audio per segment
+                    let segList = document.getElementById('segmentList');
                     if (!segList) {
                         segList = document.createElement('div');
-                        segList.id = 'chunkList';
+                        segList.id = 'segmentList';
                         recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
                     }
                     const idx = data.idx;
-                    const segDiv = document.createElement('div');
-                    segDiv.id = `segment-server-${idx}`;
-                    segDiv.innerHTML = `Server Segment ${idx + 1}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a>`;
-                    segList.appendChild(segDiv);
+                    const existing = document.getElementById(`segment-${idx}`);
+                    const html = `Segment ${idx + 1}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a> <span id="segment-tx-${idx}"></span>`;
+                    if (existing) existing.innerHTML = html; else {
+                        const segDiv = document.createElement('div');
+                        segDiv.id = `segment-${idx}`;
+                        segDiv.innerHTML = html;
+                        segList.appendChild(segDiv);
+                    }
+                } else if (data.type === 'segment_transcript') {
+                    const el = document.getElementById(`segment-tx-${data.idx}`);
+                    if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : '';
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
                     const savedUrl = data.url;
@@ -271,17 +278,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (now - segmentStartTs >= segmentMs) {
                     try {
                         const segBlob = new Blob(segmentBuffer, { type: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'audio/webm;codecs=opus' });
-                        const segUrl = URL.createObjectURL(segBlob);
-                        let segList = document.getElementById('chunkList');
+                        let segList = document.getElementById('segmentList');
                         if (!segList) {
                             segList = document.createElement('div');
-                            segList.id = 'chunkList';
+                            segList.id = 'segmentList';
                             recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
                         }
                         const idx = segList.childElementCount;
                         const entry = document.createElement('div');
                         entry.id = `segment-${idx}`;
-                        entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio> <a href="${segUrl}" download="segment_${idx + 1}.webm">Download</a>`;
+                        entry.textContent = `Segment ${idx + 1} (uploading...)`;
                         segList.appendChild(entry);
                         // Also upload the segment to server so it is playable from server
                         if (socket.readyState === WebSocket.OPEN) {
@@ -313,17 +319,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (segmentBuffer.length) {
                     try {
                         const segBlob = new Blob(segmentBuffer, { type: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'audio/webm;codecs=opus' });
-                        const segUrl = URL.createObjectURL(segBlob);
-                        let segList = document.getElementById('chunkList');
+                        let segList = document.getElementById('segmentList');
                         if (!segList) {
                             segList = document.createElement('div');
-                            segList.id = 'chunkList';
+                            segList.id = 'segmentList';
                             recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
                         }
                         const idx = segList.childElementCount;
                         const entry = document.createElement('div');
                         entry.id = `segment-${idx}`;
-                        entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio> <a href="${segUrl}" download="segment_${idx + 1}.webm">Download</a>`;
+                        entry.textContent = `Segment ${idx + 1} (uploading...)`;
                         segList.appendChild(entry);
                         // Upload final segment to server
                         if (socket.readyState === WebSocket.OPEN) {
