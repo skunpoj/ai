@@ -101,13 +101,20 @@ def index():
         Link(rel="icon", href="/static/favicon.ico"),\
         H1("Speech-to-Text"),\
         Div( # Start Div arguments
-            Button("Start Recording", id="startRecording"),
-            Button("Stop Recording", id="stopRecording", disabled=True),
-            Br(),
+            # Row 1: recording + connection health
+            Div(
+                Button("Start Recording", id="startRecording"),
+                Button("Stop Recording", id="stopRecording", disabled=True),
+                Button("Check Connection", id="testConnection"),
+                P("WebSocket: not connected", id="connStatus"),
+            ),
+            # Row 2: transcribe controls on a new line
             Div(
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
             ),
+            # Status + outputs
+            P("", id="authStatus"),
             P("Transcription: ", id="transcription"),
             Div(id="recordingsContainer"),
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
