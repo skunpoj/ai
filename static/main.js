@@ -2,8 +2,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let mediaRecorder;
     let audioChunks = [];
     let socket;
-    let recordings = []; // Array to store recorded audios and their transcriptions
-    let currentRecording = null; // Single recording per Start/Stop session
+    let recordings = []; // Array of {audioUrl, serverUrl, startTs, stopTs, durationMs, transcripts}
+    let currentRecording = null; // Active recording object
+    let recordStartTs = null;
     let savedCloseTimer = null; // Delay socket close until server confirms save
     // Ensure this flag is in the outer scope so UI buttons can toggle it reliably
     let enableGoogleSpeech = false;
@@ -95,11 +96,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (fullContainer) fullContainer.innerHTML = '';
         if (segmentContainer) segmentContainer.innerHTML = '';
         if (chunkContainer) chunkContainer.innerHTML = '';
+        if (liveTranscriptContainer) liveTranscriptContainer.innerHTML = '';
 
         console.log("Frontend: Start Recording button clicked.");
 
         // Transcription control is via buttons; default off at start
         enableGoogleSpeech = false;
+        recordStartTs = Date.now();
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -185,20 +188,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     } catch (e) {
                         console.warn('Frontend: Failed to send ping_start:', e);
                     }
-                    // Initialize current recording object for this session
-                    currentRecording = { audioUrl: null, transcription: '' };
+                    // Initialize and register current recording for this session
+                    currentRecording = {
+                        audioUrl: null,
+                        serverUrl: null,
+                        startTs: recordStartTs,
+                        stopTs: null,
+                        durationMs: null,
+                        transcripts: {
+                            google: [],
+                            googleLive: [],
+                            vertex: [],
+                            gemini: []
+                        }
+                    };
+                    recordings.push(currentRecording);
+                    displayRecordings();
                 } else if (data.transcript && typeof data.is_final !== 'undefined') {
                     // Live Google streaming transcript (append-only)
                     const line = document.createElement('div');
                     const prefix = data.is_final ? 'Google Live Final:' : 'Google Live:';
                     line.textContent = `${prefix} ${data.transcript}`;
                     if (liveTranscriptContainer) liveTranscriptContainer.appendChild(line);
-                    if (fullTranscriptContainer && data.is_final) {
-                        const fr = document.createElement('div');
-                        fr.textContent = `Google Live Final: ${data.transcript}`;
-                        fullTranscriptContainer.appendChild(fr);
+                    if (currentRecording && data.is_final) {
+                        currentRecording.transcripts.googleLive.push(data.transcript);
+                        displayRecordings();
                     }
-                    if (currentRecording && data.is_final) currentRecording.transcription = (currentRecording.transcription || '') + ' ' + data.transcript;
                 } else if (data.type === 'chunk_saved' || data.type === 'chunk_transcript') {
                     // Ignore chunk UI updates; chunks are internal
                 } else if (data.type === 'segment_saved') {
@@ -235,49 +250,33 @@ document.addEventListener('DOMContentLoaded', () => {
                     const list = document.getElementById(`segment-tx-list-${idx}`);
                     if (list) {
                         const row = document.createElement('div');
-                        row.textContent = data.transcript ? `Google: ${data.transcript}` : 'Google: (no text)';
+                        row.textContent = data.transcript ? `Google STT: ${data.transcript}` : 'Google STT: (no text)';
                         list.appendChild(row);
                     }
-                    if (fullTranscriptContainer) {
-                        const fr = document.createElement('div');
-                        fr.textContent = data.transcript ? `Google: ${data.transcript}` : 'Google: (no text)';
-                        fullTranscriptContainer.appendChild(fr);
-                    }
+                    if (currentRecording) { currentRecording.transcripts.google.push(data.transcript || ''); displayRecordings(); }
                 } else if (data.type === 'segment_transcript_vertex') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const list = document.getElementById(`segment-tx-list-${idx}`);
                     if (list) {
                         const row = document.createElement('div');
-                        row.textContent = data.transcript ? `Vertex AI: ${data.transcript}` : 'Vertex AI: (no text)';
+                        row.textContent = data.transcript ? `Gemini (Vertex AI): ${data.transcript}` : 'Gemini (Vertex AI): (no text)';
                         list.appendChild(row);
                     }
-                    if (fullTranscriptContainer) {
-                        const fr = document.createElement('div');
-                        fr.textContent = data.transcript ? `Vertex AI: ${data.transcript}` : 'Vertex AI: (no text)';
-                        fullTranscriptContainer.appendChild(fr);
-                    }
+                    if (currentRecording) { currentRecording.transcripts.vertex.push(data.transcript || ''); displayRecordings(); }
                 } else if (data.type === 'segment_transcript_gemini') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const list = document.getElementById(`segment-tx-list-${idx}`);
                     if (list) {
                         const row = document.createElement('div');
-                        row.textContent = data.transcript ? `Gemini: ${data.transcript}` : 'Gemini: (no text)';
+                        row.textContent = data.transcript ? `Gemini (API): ${data.transcript}` : 'Gemini (API): (no text)';
                         list.appendChild(row);
                     }
-                    if (fullTranscriptContainer) {
-                        const fr = document.createElement('div');
-                        fr.textContent = data.transcript ? `Gemini: ${data.transcript}` : 'Gemini: (no text)';
-                        fullTranscriptContainer.appendChild(fr);
-                    }
+                    if (currentRecording) { currentRecording.transcripts.gemini.push(data.transcript || ''); displayRecordings(); }
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
                     const savedUrl = data.url;
                     console.log('Frontend: Server saved recording at:', savedUrl);
-                    if (recordings.length > 0) {
-                        const last = recordings[recordings.length - 1];
-                        last.serverUrl = savedUrl;
-                        displayRecordings();
-                    }
+                    if (currentRecording) { currentRecording.serverUrl = savedUrl; displayRecordings(); }
                     if (savedCloseTimer) {
                         clearTimeout(savedCloseTimer);
                         savedCloseTimer = null;
@@ -363,6 +362,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     try { mediaRecorder.start(segmentMs); console.log('Frontend: MediaRecorder restarted with segmentMs:', segmentMs); } catch (e) { console.warn('Frontend: restart failed:', e); }
                     return;
                 }
+                const stopTs = Date.now();
+                if (currentRecording) { currentRecording.stopTs = stopTs; currentRecording.durationMs = stopTs - (currentRecording.startTs || stopTs); }
                 if (socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({ type: 'ping_stop' }));
                     socket.send(JSON.stringify({ end_stream: true }));
@@ -378,14 +379,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log('Frontend: Generated audio URL:', audioUrl);
 
                 // Finalize single-session recording
-                if (!currentRecording) {
-                    currentRecording = { audioUrl: null, transcription: transcriptionElement.innerText.replace('Transcription: ', '') };
+                if (currentRecording) {
+                    currentRecording.audioUrl = audioUrl;
+                    console.log('Frontend: Updated current recording with audioUrl:', currentRecording);
                 }
-                currentRecording.audioUrl = audioUrl;
-                recordings.push(currentRecording);
-                console.log('Frontend: Updated last recording with audioUrl:', currentRecording);
                 displayRecordings(); // Display recordings with the new audio player
-                currentRecording = null; // Reset for next session
+                currentRecording = null; // Reset for next session (recordings array keeps history)
             };
         } catch (err) {
             console.error('Frontend: Error accessing microphone or setting up MediaRecorder:', err);
@@ -454,11 +453,24 @@ document.addEventListener('DOMContentLoaded', () => {
         recordings.forEach((record, index) => {
             const recordDiv = document.createElement('div');
             recordDiv.className = 'recording-item';
+            const startedAt = record.startTs ? new Date(record.startTs).toLocaleTimeString() : '';
+            const endedAt = record.stopTs ? new Date(record.stopTs).toLocaleTimeString() : '';
+            const dur = record.durationMs ? Math.round(record.durationMs / 1000) : 0;
+            const playerAndDownload = `${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''} ${record.serverUrl ? `<a href="${record.serverUrl}" download>Download</a>` : ''}`;
+            const googleText = (record.transcripts && record.transcripts.google) ? record.transcripts.google.join(' ') : '';
+            const googleLiveText = (record.transcripts && record.transcripts.googleLive) ? record.transcripts.googleLive.join(' ') : '';
+            const vertexText = (record.transcripts && record.transcripts.vertex) ? record.transcripts.vertex.join(' ') : '';
+            const geminiText = (record.transcripts && record.transcripts.gemini) ? record.transcripts.gemini.join(' ') : '';
             recordDiv.innerHTML = `
                 <h3>Recording ${index + 1}</h3>
-                ${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''}
-                ${record.serverUrl ? `<div><a href="${record.serverUrl}" download>Download server audio</a></div>` : ''}
-                <p>Transcription: ${record.transcription}</p>
+                <div>${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}</div>
+                <div>${playerAndDownload}</div>
+                <div style="margin-top:6px">
+                    ${googleLiveText ? `<div>Google Live: ${googleLiveText}</div>` : ''}
+                    ${googleText ? `<div>Google STT: ${googleText}</div>` : ''}
+                    ${vertexText ? `<div>Gemini (Vertex AI): ${vertexText}</div>` : ''}
+                    ${geminiText ? `<div>Gemini (API): ${geminiText}</div>` : ''}
+                </div>
                 <hr/>
             `;
             (fullContainer || recordingsContainer).appendChild(recordDiv);

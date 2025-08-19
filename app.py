@@ -194,8 +194,7 @@ def index():
             ),
             Div(
                 H2("Full Recording"),
-                Div(id="fullContainer"),
-                Div(id="fullTranscriptContainer")
+                Div(id="fullContainer")
             ),
             Div(
                 H2("Segments"),
