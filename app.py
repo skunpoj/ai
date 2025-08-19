@@ -10,6 +10,10 @@ import queue
 import time
 import asyncio
 from google.cloud import speech
+try:
+    import google.generativeai as genai  # Optional Gemini support
+except Exception:
+    genai = None
 
 # Transcription is now controlled at runtime via Start/Stop Transcribe
 ENABLE_GOOGLE_SPEECH = True
@@ -56,6 +60,7 @@ global_speech_client = None
 global_recognition_config = None
 global_streaming_config = None
 global_auth_info = None
+global_gemini_model = None
 
 # Initialize Google client if credentials are present; otherwise stay None and we will notify on demand
 if True:
@@ -99,6 +104,23 @@ if True:
     else:
         print(f"Google Cloud credentials file not found or path not set: {credentials_path}")
 
+# Initialize Gemini model if API key is present and library available
+gemini_api_key = os.environ.get("GEMINI_API_KEY")
+if gemini_api_key and genai is not None:
+    try:
+        genai.configure(api_key=gemini_api_key)
+        # Lightweight model is sufficient for transcription-style prompts
+        global_gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+        print("Gemini model initialized for parallel transcription.")
+    except Exception as e:
+        print(f"Error initializing Gemini: {e}")
+        global_gemini_model = None
+else:
+    if not gemini_api_key:
+        print("GEMINI_API_KEY not set; skipping Gemini parallel transcription.")
+    if genai is None:
+        print("google-generativeai not installed; skipping Gemini parallel transcription.")
+
 @rt("/") # Main application route
 def index():
     return Title("Speech-to-Text with FastHTML"),\
@@ -131,10 +153,6 @@ def index():
             Div(
                 H2("Segments"),
                 Div(id="segmentContainer")
-            ),
-            Div(
-                H2("Chunks"),
-                Div(id="chunkContainer")
             ),
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
             Script(f"let SEGMENT_MS = {SEGMENT_MS};"),
@@ -347,6 +365,39 @@ async def ws_test(websocket: WebSocket):
                                 except Exception as e:
                                     print(f"Backend: segment recognize error: {e}")
                             asyncio.create_task(recognize_segment(decoded_seg, segment_index))
+
+                        # Parallel: Gemini per-segment transcription if configured
+                        if global_gemini_model is not None:
+                            async def recognize_segment_gemini(segment_bytes: bytes, idx: int):
+                                try:
+                                    loop = asyncio.get_running_loop()
+                                    def do_gemini():
+                                        try:
+                                            return global_gemini_model.generate_content([
+                                                {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
+                                                {"mime_type": "audio/webm", "data": segment_bytes}
+                                            ])
+                                        except Exception as e:
+                                            raise e
+                                    resp = await loop.run_in_executor(None, do_gemini)
+                                    text = ""
+                                    try:
+                                        text = (resp.text or "").strip()
+                                    except Exception:
+                                        text = ""
+                                    try:
+                                        await websocket.send_json({
+                                            "type": "segment_transcript_gemini",
+                                            "idx": idx,
+                                            "transcript": text,
+                                            "id": client_id,
+                                            "ts": client_ts
+                                        })
+                                    except Exception:
+                                        pass
+                                except Exception as e:
+                                    print(f"Backend: Gemini segment recognize error: {e}")
+                            asyncio.create_task(recognize_segment_gemini(decoded_seg, segment_index))
                         segment_index += 1
                     except Exception as e:
                         print(f"Backend: Error saving segment: {e}")
