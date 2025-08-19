@@ -33,26 +33,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const beforeNode = recordingsContainer && recordingsContainer.parentNode ? recordingsContainer : parentNode.firstChild;
         parentNode.insertBefore(testConnBtn, beforeNode);
     }
-    let authStatus = document.getElementById('authStatus');
-    if (!authStatus) {
-        authStatus = document.createElement('p');
-        authStatus.id = 'authStatus';
-        authStatus.innerText = '';
-        const parentNode = recordingsContainer && recordingsContainer.parentNode ? recordingsContainer.parentNode : document.body;
-        const beforeNode = recordingsContainer && recordingsContainer.parentNode ? recordingsContainer : parentNode.firstChild;
-        parentNode.insertBefore(authStatus, recordingsContainer || beforeNode);
-    }
+    // Removed authStatus UI; we'll only log masked info to console
 
     // Log redacted Google auth info on load (from server-injected globals)
     const initialAuthReady = typeof window.GOOGLE_AUTH_READY !== 'undefined' ? window.GOOGLE_AUTH_READY : false;
     const initialAuthInfo = (typeof window.GOOGLE_AUTH_INFO !== 'undefined' && window.GOOGLE_AUTH_INFO) ? window.GOOGLE_AUTH_INFO : {};
     console.log('Frontend: Google auth on load:', { ready: initialAuthReady, info: initialAuthInfo });
-    if (authStatus) {
-        const project = initialAuthInfo.project_id || '';
-        const email = initialAuthInfo.client_email_masked || '';
-        const key = initialAuthInfo.private_key_id_masked || '';
-        authStatus.innerText = initialAuthReady ? `Google auth OK (project=${project}, email=${email}, key=${key})` : 'Google auth NOT READY';
-    }
+    // Only log auth status; do not display in UI
 
     // This ensures CHUNK_SIZE is available from the backend-rendered script tag
     // Example: <script>let CHUNK_SIZE = 1600;</script>
@@ -189,7 +176,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     const email = info.client_email_masked || '';
                     const key = info.private_key_id_masked || '';
                     console.log('Frontend: Google auth status:', { ready, project, email, key });
-                    authStatus.innerText = ready ? `Google auth OK (project=${project}, email=${email}, key=${key})` : 'Google auth NOT READY';
                 } else if (data.type === 'ack') {
                     if (data.what === 'start') {
                         connStatus.innerText = 'WebSocket: start acknowledged';
