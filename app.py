@@ -134,14 +134,6 @@ def index():
 async def ws_test(websocket: WebSocket):
     print("Backend: ENTERED /ws_test function (audio streaming HTMX).") # CRITICAL TEST LOG
 
-    # Explicitly accept the WebSocket connection
-    try:
-        await websocket.accept()
-        print("Backend: WebSocket accepted.")
-    except Exception as e:
-        print(f"Backend: Failed to accept WebSocket: {e}")
-        return
-
     # Send ready signal to frontend - Frontend will start MediaRecorder on this
     try:
         await websocket.send_json({"type": "ready"})
@@ -182,6 +174,7 @@ async def ws_test(websocket: WebSocket):
             while True:
                 try:
                     message = await websocket.receive_json() # Frontend sends JSON
+                    print(f"Backend: Received JSON message keys={list(message.keys())}")
                 except WebSocketDisconnect as e:
                     print(f"Backend: Client disconnected during receive: {e}")
                     break
@@ -274,7 +267,9 @@ async def ws_test(websocket: WebSocket):
                 # Persist audio chunks to server file; forward to Google if enabled, also save per-chunk file
                 if audio_data_b64:
                     try:
+                        print(f"Backend: Audio chunk received (base64 length={len(audio_data_b64)})")
                         decoded_chunk = base64.b64decode(audio_data_b64)
+                        print(f"Backend: Decoded audio chunk bytes={len(decoded_chunk)}")
                         server_file.write(decoded_chunk)
                         server_file.flush()
                         # Save per-chunk file
@@ -284,6 +279,7 @@ async def ws_test(websocket: WebSocket):
                         chunk_url = f"/static/recordings/session_{session_ts}/chunk_{chunk_index}.webm"
                         try:
                             await websocket.send_json({"type": "chunk_saved", "idx": chunk_index, "url": chunk_url})
+                            print(f"Backend: Notified client chunk_saved idx={chunk_index}")
                         except Exception as e:
                             print(f"Backend: Failed to notify chunk_saved: {e}")
                         # Launch per-chunk transcription if enabled and client ready
