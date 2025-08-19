@@ -134,10 +134,23 @@ def index():
 async def ws_test(websocket: WebSocket):
     print("Backend: ENTERED /ws_test function (audio streaming HTMX).") # CRITICAL TEST LOG
 
+    # Explicitly accept the WebSocket connection
+    try:
+        await websocket.accept()
+        print("Backend: WebSocket accepted.")
+    except Exception as e:
+        print(f"Backend: Failed to accept WebSocket: {e}")
+        return
+
     # Send ready signal to frontend - Frontend will start MediaRecorder on this
     try:
         await websocket.send_json({"type": "ready"})
         print("Backend: Sent 'ready' signal.")
+        # Also send a plain text fallback for clients not parsing JSON early
+        try:
+            await websocket.send_text("ready")
+        except Exception:
+            pass
     except Exception as e:
         # Client may have disconnected before we could send
         print(f"Backend: Failed to send 'ready' (client likely disconnected): {e}")

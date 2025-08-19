@@ -94,6 +94,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
+
+                // Safety timer: start recorder if 'ready' not received within 1s
+                setTimeout(() => {
+                    if (mediaRecorder && mediaRecorder.state !== 'recording') {
+                        try {
+                            mediaRecorder.start(CHUNK_MS);
+                            console.log('Frontend: Safety start MediaRecorder with CHUNK_MS:', CHUNK_MS);
+                        } catch (e) {
+                            console.warn('Frontend: Safety start failed:', e);
+                        }
+                    }
+                }, 1000);
             };
 
             socket.onmessage = event => {
