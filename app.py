@@ -66,7 +66,7 @@ if True:
             
             global_speech_client = speech.SpeechClient()
             global_recognition_config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
+                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
                 sample_rate_hertz=SAMPLE_RATE,
                 language_code="en-US",
             )
@@ -149,7 +149,7 @@ async def ws_test(websocket: WebSocket):
     recordings_dir = os.path.join("static", "recordings")
     os.makedirs(recordings_dir, exist_ok=True)
     session_ts = get_current_time()
-    server_filename = f"recording_{session_ts}.ogg"
+    server_filename = f"recording_{session_ts}.webm"
     server_filepath = os.path.join(recordings_dir, server_filename)
     server_file = open(server_filepath, "ab")
 
@@ -260,10 +260,10 @@ async def ws_test(websocket: WebSocket):
                         server_file.write(decoded_chunk)
                         server_file.flush()
                         # Save per-chunk file
-                        chunk_path = os.path.join(session_chunks_dir, f"chunk_{chunk_index}.ogg")
+                        chunk_path = os.path.join(session_chunks_dir, f"chunk_{chunk_index}.webm")
                         with open(chunk_path, "ab") as cf:
                             cf.write(decoded_chunk)
-                        chunk_url = f"/static/recordings/session_{session_ts}/chunk_{chunk_index}.ogg"
+                        chunk_url = f"/static/recordings/session_{session_ts}/chunk_{chunk_index}.webm"
                         try:
                             await websocket.send_json({"type": "chunk_saved", "idx": chunk_index, "url": chunk_url})
                         except Exception as e:

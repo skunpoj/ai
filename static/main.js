@@ -73,7 +73,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/ogg; codecs=opus' });
+            const preferredType = 'audio/webm; codecs=opus';
+            const options = (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(preferredType)) ? { mimeType: preferredType } : {};
+            mediaRecorder = new MediaRecorder(stream, options);
             audioChunks = [];
             
             // WebSocket connection is managed by HTMX on the hx-ext="ws" element.
