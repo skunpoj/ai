@@ -125,16 +125,15 @@ def index():
                 f"window.GOOGLE_AUTH_READY = {( 'true' if (global_speech_client and global_streaming_config) else 'false' )};\n"
                 "console.log('Frontend: Google auth on load:', { ready: window.GOOGLE_AUTH_READY, info: window.GOOGLE_AUTH_INFO });"
             ),
-            Script(src="/static/main.js"),
-            hx_ext="ws" # Apply HTMX WebSocket extension to the Div
+            Script(src="/static/main.js")
         ) # End Div arguments
 
 
-@app.ws("/ws_test") # WebSocket endpoint for HTMX-driven audio streaming
+@app.ws("/ws_stream") # Dedicated WebSocket endpoint for audio streaming
 async def ws_test(websocket: WebSocket):
-    print("Backend: ENTERED /ws_test function (audio streaming HTMX).") # CRITICAL TEST LOG
+    print("Backend: ENTERED /ws_stream function (audio streaming).") # CRITICAL TEST LOG
 
-    # Do not send 'ready' here; wait for explicit client 'hello' to avoid double-starts
+    # Do not send 'ready' yet; wait for client 'hello' to avoid race
 
     # Queues to buffer audio chunks for Google Speech API
     # Use a standard Queue for the Google streaming call (which is synchronous)
@@ -155,6 +154,7 @@ async def ws_test(websocket: WebSocket):
 
     # Task to continuously receive messages from frontend
     async def receive_from_frontend():
+        nonlocal chunk_index
         try:
             transcribe_enabled = False
             stream_started = False
@@ -162,6 +162,11 @@ async def ws_test(websocket: WebSocket):
             while True:
                 try:
                     message = await websocket.receive_json() # Frontend sends JSON
+                    try:
+                        mtype = message.get("type")
+                    except Exception:
+                        mtype = None
+                    print(f"Backend: Received JSON message type={mtype} keys={list(message.keys())}")
                     print(f"Backend: Received JSON message keys={list(message.keys())}")
                 except WebSocketDisconnect as e:
                     print(f"Backend: Client disconnected during receive: {e}")
