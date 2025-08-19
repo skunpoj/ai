@@ -21,8 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const segmentContainer = document.getElementById('segmentContainer') || recordingsContainer;
     const chunkContainer = null; // Removed redundant chunk UI
     const toggleGoogleSpeechCheckbox = document.getElementById('toggleGoogleSpeech');
-    const segmentMsInput = document.getElementById('segmentMsInput');
-    const segmentMsValue = document.getElementById('segmentMsValue');
+    const segmentLenGroup = document.getElementById('segmentLenGroup');
     
     // Add a connection status and test button UI elements if not present
     let connStatus = document.getElementById('connStatus');
@@ -55,20 +54,21 @@ document.addEventListener('DOMContentLoaded', () => {
     // Example: <script>let CHUNK_SIZE = 1600;</script>
     // No explicit declaration here as it's provided by app.py
 
-    // Segment length control state
-    let segmentMs = (typeof window !== 'undefined' && typeof window.SEGMENT_MS !== 'undefined') ? window.SEGMENT_MS : 3000;
-    if (segmentMsInput && segmentMsValue) {
-        try { segmentMsInput.value = String(segmentMs); segmentMsValue.textContent = String(segmentMs); } catch(_) {}
-        segmentMsInput.addEventListener('input', () => {
-            const v = Number(segmentMsInput.value);
-            if (!Number.isNaN(v) && v >= 250 && v <= 20000) {
-                segmentMs = v;
-                segmentMsValue.textContent = String(segmentMs);
-                console.log('Frontend: segmentMs updated:', segmentMs);
-                // Reset current aggregation so the next segment starts fresh
-                segmentBuffer = [];
-                segmentStartTs = null;
-            }
+    // Segment length control state (radio group)
+    let segmentMs = (typeof window !== 'undefined' && typeof window.SEGMENT_MS !== 'undefined') ? window.SEGMENT_MS : 10000;
+    if (segmentLenGroup) {
+        const radios = segmentLenGroup.querySelectorAll('input[type="radio"][name="segmentLen"]');
+        radios.forEach(r => {
+            if (Number(r.value) === Number(segmentMs)) r.checked = true;
+            r.addEventListener('change', () => {
+                const v = Number(r.value);
+                if (!Number.isNaN(v) && v >= 5000 && v <= 150000) {
+                    segmentMs = v;
+                    console.log('Frontend: segmentMs updated via radio:', segmentMs);
+                    segmentBuffer = [];
+                    segmentStartTs = null;
+                }
+            });
         });
     }
 
@@ -89,9 +89,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const preferredType = 'audio/webm; codecs=opus';
-            const options = (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(preferredType)) ? { mimeType: preferredType } : {};
-            mediaRecorder = new MediaRecorder(stream, options);
+            // Prefer OGG Opus for better standalone segment playability; fallback to WebM Opus
+            const preferredTypes = [
+                'audio/ogg;codecs=opus',
+                'audio/webm;codecs=opus',
+                'audio/webm'
+            ];
+            let recOptions = {};
+            let recMimeType = '';
+            if (window.MediaRecorder && MediaRecorder.isTypeSupported) {
+                for (const t of preferredTypes) {
+                    if (MediaRecorder.isTypeSupported(t)) { recOptions = { mimeType: t }; recMimeType = t; break; }
+                }
+            }
+            mediaRecorder = new MediaRecorder(stream, recOptions);
             audioChunks = [];
 
             // Build a WebAudio graph to gather 16kHz mono PCM for LINEAR16 streaming
@@ -268,15 +279,18 @@ document.addEventListener('DOMContentLoaded', () => {
             mediaRecorder.ondataavailable = async event => {
                 console.log('Frontend: Data available:', event.data.size, 'bytes');
                 console.log('Frontend: MediaRecorder mimeType:', mediaRecorder.mimeType);
-                audioChunks.push(event.data);
+                if (event.data && event.data.size > 0) {
+                    audioChunks.push(event.data);
+                }
                 console.log('Frontend: Current audioChunks length:', audioChunks.length);
                 // Client-side segmenting for better playback experience
                 const now = Date.now();
                 if (segmentStartTs === null) segmentStartTs = now;
-                segmentBuffer.push(event.data);
+                if (event.data && event.data.size > 0) segmentBuffer.push(event.data);
                 if (now - segmentStartTs >= segmentMs) {
                     try {
-                        const segBlob = new Blob(segmentBuffer, { type: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'audio/webm;codecs=opus' });
+                        const segBlob = new Blob(segmentBuffer, { type: recMimeType || (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm;codecs=opus' });
+                        console.log('Frontend: Built segment blob size(bytes)=', segBlob.size, 'type=', segBlob.type);
                         let segList = document.getElementById('segmentList');
                         if (!segList) {
                             segList = document.createElement('div');
@@ -306,7 +320,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Flush remaining segment buffer as a playable segment
                 if (segmentBuffer.length) {
                     try {
-                        const segBlob = new Blob(segmentBuffer, { type: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'audio/webm;codecs=opus' });
+                        const segBlob = new Blob(segmentBuffer, { type: recMimeType || (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm;codecs=opus' });
+                        console.log('Frontend: Final segment blob size(bytes)=', segBlob.size, 'type=', segBlob.type);
                         let segList = document.getElementById('segmentList');
                         if (!segList) {
                             segList = document.createElement('div');
