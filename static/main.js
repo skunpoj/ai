@@ -279,7 +279,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     try {
                         const arrayBuffer = await event.data.arrayBuffer();
                         const b64 = arrayBufferToBase64(arrayBuffer);
-                        socket.send(JSON.stringify({ audio: b64, enable_google_speech: enableGoogleSpeech }));
+                        // Always send enable_google_speech: false; we do per-segment recognition only
+                        socket.send(JSON.stringify({ audio: b64, enable_google_speech: false }));
                     } catch (e) {
                         console.error('Frontend: Failed to convert/send chunk:', e);
                     }
