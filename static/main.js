@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const segmentModal = document.getElementById('segmentModal');
     const closeSegmentModalBtn = document.getElementById('closeSegmentModal');
     const fullTranscriptContainer = document.getElementById('fullTranscriptContainer');
-    // Recorder rotation helpers
+    // Recorder helpers
     let currentStream = null;
     let recOptions = {};
     let recMimeType = '';
@@ -172,14 +172,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
-                // Start a continuous recorder without built-in timeslice; manual segmentation with timer ensures fresh container headers
-                try { mediaRecorder.start(); console.log('Frontend: MediaRecorder started (continuous).'); } catch (e) { console.warn('Frontend: start on open failed:', e); }
-                // Manual segmentation timer
-                try { if (segmentTimerId) clearInterval(segmentTimerId); } catch(_) {}
-                segmentTimerId = setInterval(async () => {
-                    if (!mediaRecorder || mediaRecorder.state !== 'recording') return;
-                    try { mediaRecorder.requestData(); } catch(_) {}
-                }, segmentMs);
+                // Use native timeslice; each ondataavailable blob is a self-contained segment
+                try { mediaRecorder.start(segmentMs); console.log('Frontend: MediaRecorder started with segmentMs:', segmentMs); } catch (e) { console.warn('Frontend: start on open failed:', e); }
             };
 
             socket.onmessage = event => {
@@ -353,8 +347,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             mediaRecorder.ondataavailable = async event => {
-                // Each event is a complete, standalone segment because we either ran with timeslice earlier or requestData() timer now
-                if (!event.data || event.data.size === 0) return;
+                // Each event is a complete, standalone segment (timeslice mode)
+                if (!event.data || event.data.size < 2048) return; // skip too-small blobs
                 console.log('Frontend: Segment available:', event.data.size, 'bytes');
                 const segBlob = event.data;
                 try { audioChunks.push(segBlob); } catch(_) {}
@@ -380,18 +374,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             mediaRecorder.onstop = async () => {
                 console.log('Frontend: MediaRecorder stopped.');
-                try { if (segmentTimerId) clearInterval(segmentTimerId); } catch(_) {}
-                segmentTimerId = null;
                 if (segmentRotate) {
                     segmentRotate = false;
                     // Restart with new segmentMs timeslice
                     try {
                         mediaRecorder = new MediaRecorder(currentStream, recOptions);
-                        mediaRecorder.ondataavailable = arguments.callee.bind(null); // preserve handler
-                        mediaRecorder.start();
-                        console.log('Frontend: MediaRecorder restarted (continuous).');
-                        try { if (segmentTimerId) clearInterval(segmentTimerId); } catch(_) {}
-                        segmentTimerId = setInterval(() => { try { mediaRecorder.requestData(); } catch(_) {} }, segmentMs);
+                        mediaRecorder.ondataavailable = arguments.callee.bind(null);
+                        mediaRecorder.start(segmentMs);
+                        console.log('Frontend: MediaRecorder restarted with segmentMs:', segmentMs);
                     } catch (e) { console.warn('Frontend: restart failed:', e); }
                     return;
                 }
