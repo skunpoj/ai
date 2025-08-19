@@ -172,10 +172,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         chunkList = document.createElement('div');
                         chunkList.id = 'chunkList';
                         recordingsContainer.parentNode.insertBefore(chunkList, recordingsContainer);
+                        // Ensure inline flow of chunk labels
+                        chunkList.style.display = 'flex';
+                        chunkList.style.flexWrap = 'wrap';
+                        chunkList.style.gap = '8px';
                     }
                     const entry = document.createElement('div');
                     entry.id = `chunk-${idx}`;
                     entry.innerHTML = `Chunk ${idx + 1} <span id="chunk-tx-${idx}"></span>`;
+                    entry.style.display = 'inline-block';
                     chunkList.appendChild(entry);
                 } else if (data.type === 'chunk_transcript') {
                     const el = document.getElementById(`chunk-tx-${data.idx}`);
