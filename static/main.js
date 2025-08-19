@@ -7,6 +7,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let savedCloseTimer = null; // Delay socket close until server confirms save
     // Ensure this flag is in the outer scope so UI buttons can toggle it reliably
     let enableGoogleSpeech = false;
+    // Buffer client-side chunks into longer segments for playback
+    let segmentBuffer = [];
+    let segmentStartTs = null;
 
     const startRecordingButton = document.getElementById('startRecording');
     const stopRecordingButton = document.getElementById('stopRecording');
@@ -15,6 +18,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const transcriptionElement = document.getElementById('transcription');
     const recordingsContainer = document.getElementById('recordingsContainer');
     const toggleGoogleSpeechCheckbox = document.getElementById('toggleGoogleSpeech');
+    const segmentMsInput = document.getElementById('segmentMsInput');
+    const segmentMsValue = document.getElementById('segmentMsValue');
     
     // Add a connection status and test button UI elements if not present
     let connStatus = document.getElementById('connStatus');
@@ -46,6 +51,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // This ensures CHUNK_SIZE is available from the backend-rendered script tag
     // Example: <script>let CHUNK_SIZE = 1600;</script>
     // No explicit declaration here as it's provided by app.py
+
+    // Segment length control state
+    let segmentMs = (typeof window !== 'undefined' && typeof window.SEGMENT_MS !== 'undefined') ? window.SEGMENT_MS : 3000;
+    if (segmentMsInput && segmentMsValue) {
+        try { segmentMsInput.value = String(segmentMs); segmentMsValue.textContent = String(segmentMs); } catch(_) {}
+        segmentMsInput.addEventListener('input', () => {
+            const v = Number(segmentMsInput.value);
+            if (!Number.isNaN(v) && v >= 250 && v <= 20000) {
+                segmentMs = v;
+                segmentMsValue.textContent = String(segmentMs);
+                console.log('Frontend: segmentMs updated:', segmentMs);
+                // Reset current aggregation so the next segment starts fresh
+                segmentBuffer = [];
+                segmentStartTs = null;
+            }
+        });
+    }
 
     startRecordingButton.addEventListener('click', async () => {
         startRecordingButton.disabled = true;
@@ -224,6 +246,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log('Frontend: MediaRecorder mimeType:', mediaRecorder.mimeType);
                 audioChunks.push(event.data);
                 console.log('Frontend: Current audioChunks length:', audioChunks.length);
+                // Client-side segmenting for better playback experience
+                const now = Date.now();
+                if (segmentStartTs === null) segmentStartTs = now;
+                segmentBuffer.push(event.data);
+                if (now - segmentStartTs >= segmentMs) {
+                    try {
+                        const segBlob = new Blob(segmentBuffer, { type: 'audio/webm' });
+                        const segUrl = URL.createObjectURL(segBlob);
+                        let segList = document.getElementById('chunkList');
+                        if (!segList) {
+                            segList = document.createElement('div');
+                            segList.id = 'chunkList';
+                            recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
+                        }
+                        const idx = segList.childElementCount;
+                        const entry = document.createElement('div');
+                        entry.id = `segment-${idx}`;
+                        entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio>`;
+                        segList.appendChild(entry);
+                    } catch (e) { console.warn('Frontend: failed to create segment blob', e); }
+                    segmentBuffer = [];
+                    segmentStartTs = now;
+                }
                 if (socket.readyState === WebSocket.OPEN) {
                     console.log('Frontend: Sending audio data. WebSocket readyState:', socket.readyState, 'Chunk size:', event.data.size);
                     try {
@@ -240,6 +285,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
             mediaRecorder.onstop = async () => {
                 console.log('Frontend: MediaRecorder stopped. Finalizing audio.');
+                // Flush remaining segment buffer as a playable segment
+                if (segmentBuffer.length) {
+                    try {
+                        const segBlob = new Blob(segmentBuffer, { type: 'audio/webm' });
+                        const segUrl = URL.createObjectURL(segBlob);
+                        let segList = document.getElementById('chunkList');
+                        if (!segList) {
+                            segList = document.createElement('div');
+                            segList.id = 'chunkList';
+                            recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
+                        }
+                        const idx = segList.childElementCount;
+                        const entry = document.createElement('div');
+                        entry.id = `segment-${idx}`;
+                        entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio>`;
+                        segList.appendChild(entry);
+                    } catch (e) { console.warn('Frontend: failed to flush segment', e); }
+                    segmentBuffer = [];
+                    segmentStartTs = null;
+                }
                 if (socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({ type: 'ping_stop' }));
                     socket.send(JSON.stringify({ end_stream: true })); // Send end signal as JSON
