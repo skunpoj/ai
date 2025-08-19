@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let enableGoogleSpeech = false;
     // Buffer client-side chunks into longer segments for playback
     let segmentBuffer = [];
+    let lastChunkBlob = null; // 1 timeslice overlap to improve segment continuity
     let segmentStartTs = null;
 
     const startRecordingButton = document.getElementById('startRecording');
@@ -289,7 +290,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Client-side segmenting for better playback experience
                 const now = Date.now();
                 if (segmentStartTs === null) segmentStartTs = now;
-                if (event.data && event.data.size > 0) segmentBuffer.push(event.data);
+                if (event.data && event.data.size > 0) {
+                    segmentBuffer.push(event.data);
+                    lastChunkBlob = event.data;
+                }
                 if (now - segmentStartTs >= segmentMs) {
                     try {
                         const segBlob = new Blob(segmentBuffer, { type: recMimeType || (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm;codecs=opus' });
@@ -312,7 +316,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts, mime: segBlob.type }));
                         }
                     } catch (e) { console.warn('Frontend: failed to create/send segment blob', e); }
-                    segmentBuffer = [];
+                    segmentBuffer = lastChunkBlob ? [lastChunkBlob] : [];
                     segmentStartTs = now;
                 }
                 // Do not send per-chunk audio anymore; we only stream PCM and post full segments
@@ -345,6 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     } catch (e) { console.warn('Frontend: failed to flush segment', e); }
                     segmentBuffer = [];
                     segmentStartTs = null;
+                    lastChunkBlob = null;
                 }
                 if (socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({ type: 'ping_stop' }));
