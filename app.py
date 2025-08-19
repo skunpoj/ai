@@ -114,7 +114,6 @@ def index():
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
             ),
             # Status + outputs
-            P("", id="authStatus"),
             P("Transcription: ", id="transcription"),
             Div(id="recordingsContainer"),
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
