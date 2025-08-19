@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (Number(r.value) === Number(segmentMs)) r.checked = true;
             r.addEventListener('change', () => {
                 const v = Number(r.value);
-                if (!Number.isNaN(v) && v >= 5000 && v <= 150000) {
+                if (!Number.isNaN(v) && v >= 5000 && v <= 300000) {
                     segmentMs = v;
                     console.log('Frontend: segmentMs updated via radio:', segmentMs);
                     // If currently recording, rotate MediaRecorder to apply new timeslice
@@ -247,7 +247,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     const existing = document.getElementById(`segment-${idx}`);
                     const when = (typeof data.ts === 'number') ? new Date(data.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
                     const mime = (typeof data.mime === 'string' && data.mime) ? data.mime : (String(data.url).endsWith('.ogg') ? 'audio/ogg' : 'audio/webm');
-                    const html = `Segment ${idx + 1} — ${when}: <audio controls id="segment-audio-${idx}"><source src="${data.url}" type="${mime}"></audio> <a href="${data.url}" download>Download</a>
+                    const sizeTxt = (typeof data.size === 'number') ? ` (${(data.size/1024).toFixed(0)} KB)` : '';
+                    const html = `Segment ${idx + 1} — ${when}: <audio controls id="segment-audio-${idx}"><source src="${data.url}" type="${mime}"></audio> <a href="${data.url}" download>Download</a>${sizeTxt}
                     <div id="segment-tx-list-${idx}" class="tx-list"></div>`;
                     if (existing) existing.innerHTML = html; else {
                         const segDiv = document.createElement('div');
