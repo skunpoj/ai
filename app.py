@@ -267,9 +267,39 @@ async def ws_test(websocket: WebSocket):
                             await websocket.send_json({"type": "chunk_saved", "idx": chunk_index, "url": chunk_url})
                         except Exception as e:
                             print(f"Backend: Failed to notify chunk_saved: {e}")
-                        chunk_index += 1
+                        # Launch per-chunk transcription if enabled and client ready
+                        this_idx = chunk_index
+                        if enable_google_speech and (global_speech_client and global_streaming_config):
+                            try:
+                                # Run short recognize on this chunk in background to get per-chunk transcript
+                                loop = asyncio.get_running_loop()
+                                async def transcribe_chunk(chunk_bytes: bytes, idx: int):
+                                    try:
+                                        def do_recognize():
+                                            cfg = speech.RecognitionConfig(
+                                                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+                                                sample_rate_hertz=SAMPLE_RATE,
+                                                language_code="en-US",
+                                            )
+                                            audio = speech.RecognitionAudio(content=chunk_bytes)
+                                            return global_speech_client.recognize(config=cfg, audio=audio)
+                                        resp = await loop.run_in_executor(None, do_recognize)
+                                        transcript_text = ""
+                                        if resp.results and resp.results[0].alternatives:
+                                            transcript_text = resp.results[0].alternatives[0].transcript or ""
+                                        try:
+                                            await websocket.send_json({"type": "chunk_transcript", "idx": idx, "transcript": transcript_text})
+                                        except Exception:
+                                            pass
+                                    except Exception as e:
+                                        print(f"Backend: per-chunk recognize error: {e}")
+                                asyncio.create_task(transcribe_chunk(decoded_chunk, this_idx))
+                            except Exception as e:
+                                print(f"Backend: Failed to schedule per-chunk transcription: {e}")
+                        # Also forward bytes to streaming recognizer if active
                         if enable_google_speech and stream_started:
                             await audio_queue.put(decoded_chunk)
+                        chunk_index += 1
                     except Exception as e:
                         print(f"Backend: Error decoding/writing audio chunk: {e}")
                 else:

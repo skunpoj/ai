@@ -145,8 +145,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     const entry = document.createElement('div');
                     entry.id = `chunk-${idx}`;
-                    entry.innerHTML = `<a href="${data.url}" download>Download chunk ${idx + 1}</a> <span id="chunk-tx-${idx}"></span>`;
+                    entry.innerHTML = `Chunk ${idx + 1}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a> <span id="chunk-tx-${idx}"></span>`;
                     chunkList.appendChild(entry);
+                } else if (data.type === 'chunk_transcript') {
+                    const el = document.getElementById(`chunk-tx-${data.idx}`);
+                    if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : '';
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
                     const savedUrl = data.url;
