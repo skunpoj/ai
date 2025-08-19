@@ -24,6 +24,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const chunkContainer = null; // Removed redundant chunk UI
     const toggleGoogleSpeechCheckbox = document.getElementById('toggleGoogleSpeech');
     const segmentLenGroup = document.getElementById('segmentLenGroup');
+    const openSegmentModalBtn = document.getElementById('openSegmentModal');
+    const segmentModal = document.getElementById('segmentModal');
+    const closeSegmentModalBtn = document.getElementById('closeSegmentModal');
+    const fullTranscriptContainer = document.getElementById('fullTranscriptContainer');
     
     // Add a connection status and test button UI elements if not present
     let connStatus = document.getElementById('connStatus');
@@ -73,6 +77,8 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
+    if (openSegmentModalBtn && segmentModal) openSegmentModalBtn.addEventListener('click', () => { segmentModal.style.display = 'block'; });
+    if (closeSegmentModalBtn && segmentModal) closeSegmentModalBtn.addEventListener('click', () => { segmentModal.style.display = 'none'; });
 
     startRecordingButton.addEventListener('click', async () => {
         startRecordingButton.disabled = true;
@@ -178,9 +184,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (data.transcript && typeof data.is_final !== 'undefined') {
                     // Live Google streaming transcript (append-only)
                     const line = document.createElement('div');
-                    const prefix = data.is_final ? '[Google Live Final]' : '[Google Live]';
+                    const prefix = data.is_final ? 'Google Live Final:' : 'Google Live:';
                     line.textContent = `${prefix} ${data.transcript}`;
                     if (liveTranscriptContainer) liveTranscriptContainer.appendChild(line);
+                    if (fullTranscriptContainer && data.is_final) {
+                        const fr = document.createElement('div');
+                        fr.textContent = `Google Live Final: ${data.transcript}`;
+                        fullTranscriptContainer.appendChild(fr);
+                    }
                     if (currentRecording && data.is_final) currentRecording.transcription = (currentRecording.transcription || '') + ' ' + data.transcript;
                 } else if (data.type === 'chunk_saved' || data.type === 'chunk_transcript') {
                     // Ignore chunk UI updates; chunks are internal
@@ -218,24 +229,39 @@ document.addEventListener('DOMContentLoaded', () => {
                     const list = document.getElementById(`segment-tx-list-${idx}`);
                     if (list) {
                         const row = document.createElement('div');
-                        row.textContent = data.transcript ? `[Google] ${data.transcript}` : '[Google] (no text)';
+                        row.textContent = data.transcript ? `Google: ${data.transcript}` : 'Google: (no text)';
                         list.appendChild(row);
+                    }
+                    if (fullTranscriptContainer) {
+                        const fr = document.createElement('div');
+                        fr.textContent = data.transcript ? `Google: ${data.transcript}` : 'Google: (no text)';
+                        fullTranscriptContainer.appendChild(fr);
                     }
                 } else if (data.type === 'segment_transcript_vertex') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const list = document.getElementById(`segment-tx-list-${idx}`);
                     if (list) {
                         const row = document.createElement('div');
-                        row.textContent = data.transcript ? `[Vertex] ${data.transcript}` : '[Vertex] (no text)';
+                        row.textContent = data.transcript ? `Vertex AI: ${data.transcript}` : 'Vertex AI: (no text)';
                         list.appendChild(row);
+                    }
+                    if (fullTranscriptContainer) {
+                        const fr = document.createElement('div');
+                        fr.textContent = data.transcript ? `Vertex AI: ${data.transcript}` : 'Vertex AI: (no text)';
+                        fullTranscriptContainer.appendChild(fr);
                     }
                 } else if (data.type === 'segment_transcript_gemini') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const list = document.getElementById(`segment-tx-list-${idx}`);
                     if (list) {
                         const row = document.createElement('div');
-                        row.textContent = data.transcript ? `[Gemini] ${data.transcript}` : '[Gemini] (no text)';
+                        row.textContent = data.transcript ? `Gemini: ${data.transcript}` : 'Gemini: (no text)';
                         list.appendChild(row);
+                    }
+                    if (fullTranscriptContainer) {
+                        const fr = document.createElement('div');
+                        fr.textContent = data.transcript ? `Gemini: ${data.transcript}` : 'Gemini: (no text)';
+                        fullTranscriptContainer.appendChild(fr);
                     }
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
