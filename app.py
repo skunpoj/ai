@@ -290,17 +290,32 @@ async def ws_test(websocket: WebSocket):
                             loop = asyncio.get_running_loop()
                             async def recognize_segment(segment_bytes: bytes, idx: int):
                                 try:
-                                    def do_recognize():
+                                    def do_recognize_webm():
                                         cfg = speech.RecognitionConfig(
                                             encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
                                             language_code="en-US",
                                         )
                                         audio = speech.RecognitionAudio(content=segment_bytes)
                                         return global_speech_client.recognize(config=cfg, audio=audio)
-                                    resp = await loop.run_in_executor(None, do_recognize)
+                                    def do_recognize_ogg():
+                                        cfg = speech.RecognitionConfig(
+                                            encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
+                                            language_code="en-US",
+                                        )
+                                        audio = speech.RecognitionAudio(content=segment_bytes)
+                                        return global_speech_client.recognize(config=cfg, audio=audio)
+                                    resp = await loop.run_in_executor(None, do_recognize_webm)
                                     transcript_text = ""
                                     if resp.results and resp.results[0].alternatives:
                                         transcript_text = resp.results[0].alternatives[0].transcript or ""
+                                    # Fallback: try OGG_OPUS if WEBM_OPUS produced no text
+                                    if not transcript_text:
+                                        try:
+                                            resp2 = await loop.run_in_executor(None, do_recognize_ogg)
+                                            if resp2.results and resp2.results[0].alternatives:
+                                                transcript_text = resp2.results[0].alternatives[0].transcript or ""
+                                        except Exception as _:
+                                            pass
                                     try:
                                         await websocket.send_json({
                                             "type": "segment_transcript",
