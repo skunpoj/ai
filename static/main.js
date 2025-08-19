@@ -180,7 +180,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const existing = document.getElementById(`segment-${idx}`);
                     const when = (typeof data.ts === 'number') ? new Date(data.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
-                    const html = `Segment ${idx + 1} — ${when}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a> <span id="segment-tx-${idx}" class="tx-google"></span> <span id="segment-tx-gem-${idx}" class="tx-gemini"></span>`;
+                    const html = `Segment ${idx + 1} — ${when}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a> <span id="segment-tx-${idx}" class="tx-google"></span> <span id="segment-tx-vertex-${idx}" class="tx-vertex"></span> <span id="segment-tx-gem-${idx}" class="tx-gemini"></span>`;
                     if (existing) existing.innerHTML = html; else {
                         const segDiv = document.createElement('div');
                         segDiv.id = `segment-${idx}`;
@@ -192,10 +192,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (txEl && (!txEl.textContent || txEl.textContent.trim() === '')) {
                         txEl.textContent = ' — uploaded';
                     }
-                } else if (data.type === 'segment_transcript') {
+                } else if (data.type === 'segment_transcript' || data.type === 'segment_transcript_google') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const el = document.getElementById(`segment-tx-${idx}`);
                     if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : ' — (no Google text)';
+                } else if (data.type === 'segment_transcript_vertex') {
+                    const idx = typeof data.id === 'number' ? data.id : data.idx;
+                    const el = document.getElementById(`segment-tx-vertex-${idx}`);
+                    if (el) el.textContent = data.transcript ? ` — [Vertex] ${data.transcript}` : '';
                 } else if (data.type === 'segment_transcript_gemini') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const el = document.getElementById(`segment-tx-gem-${idx}`);

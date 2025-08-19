@@ -349,7 +349,7 @@ async def ws_test(websocket: WebSocket):
                             })
                         except Exception:
                             pass
-                        # Optionally recognize this segment when transcribe is enabled and client ready
+                        # Google STT per-segment (only when transcribe is enabled)
                         if transcribe_enabled and (global_speech_client and global_streaming_config):
                             loop = asyncio.get_running_loop()
                             async def recognize_segment(segment_bytes: bytes, idx: int):
@@ -381,6 +381,14 @@ async def ws_test(websocket: WebSocket):
                                         except Exception as _:
                                             pass
                                     try:
+                                        # Send both a specific Google type and legacy generic type for compatibility
+                                        await websocket.send_json({
+                                            "type": "segment_transcript_google",
+                                            "idx": idx,
+                                            "transcript": transcript_text,
+                                            "id": client_id,
+                                            "ts": client_ts
+                                        })
                                         await websocket.send_json({
                                             "type": "segment_transcript",
                                             "idx": idx,
@@ -394,8 +402,8 @@ async def ws_test(websocket: WebSocket):
                                     print(f"Backend: segment recognize error: {e}")
                             asyncio.create_task(recognize_segment(decoded_seg, segment_index))
 
-                        # Parallel: Gemini per-segment transcription using Vertex (service account) preferred
-                        if global_vertex_model is not None and Part is not None:
+                        # Parallel: Vertex (service account) per-segment
+                        if transcribe_enabled and global_vertex_model is not None and Part is not None:
                             async def recognize_segment_vertex(segment_bytes: bytes, idx: int):
                                 try:
                                     loop = asyncio.get_running_loop()
@@ -422,7 +430,7 @@ async def ws_test(websocket: WebSocket):
                                         text = ""
                                     try:
                                         await websocket.send_json({
-                                            "type": "segment_transcript_gemini",
+                                            "type": "segment_transcript_vertex",
                                             "idx": idx,
                                             "transcript": text,
                                             "id": client_id,
@@ -433,8 +441,8 @@ async def ws_test(websocket: WebSocket):
                                 except Exception as e:
                                     print(f"Backend: Vertex Gemini segment recognize error: {e}")
                             asyncio.create_task(recognize_segment_vertex(decoded_seg, segment_index))
-                        elif global_gemini_model is not None:
-                            # Fallback to API-key google-generativeai if Vertex not configured
+                        # Parallel: Gemini API-key per-segment
+                        if transcribe_enabled and global_gemini_model is not None:
                             async def recognize_segment_gemini(segment_bytes: bytes, idx: int):
                                 try:
                                     loop = asyncio.get_running_loop()
