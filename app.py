@@ -311,6 +311,11 @@ async def ws_test(websocket: WebSocket):
                                 asyncio.create_task(transcribe_chunk(decoded_chunk, this_idx))
                             except Exception as e:
                                 print(f"Backend: Failed to schedule per-chunk transcription: {e}")
+                        # Auto-start streaming recognizer if client is sending google_speech-enabled chunks
+                        if enable_google_speech and not stream_started and (global_speech_client and global_streaming_config):
+                            stream_started = True
+                            if stream_task is None:
+                                stream_task = asyncio.create_task(stream_to_google_and_send_to_frontend())
                         # Also forward bytes to streaming recognizer if active
                         if enable_google_speech and stream_started:
                             try:
