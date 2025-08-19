@@ -188,8 +188,10 @@ def index():
                         id="segmentLenGroup"
                     ),
                     Button("Close", id="closeSegmentModal"),
-                , id="segmentModalContent", style="background:#222;padding:16px;border:1px solid #444;max-width:480px;margin:10% auto")
-            , id="segmentModal", style="display:none;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999"),
+                    id="segmentModalContent", style="background:#222;padding:16px;border:1px solid #444;max-width:480px;margin:10% auto"
+                ),
+                id="segmentModal", style="display:none;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999"
+            ),
             Div(
                 H2("Full Recording"),
                 Div(id="fullContainer"),
