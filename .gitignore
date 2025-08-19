@@ -1,9 +1,11 @@
-# Environment variables
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 .env
-
-# IDE files
-.vscode/
+venv/
+.env.local
+.DS_Store
 .idea/
-
-# Node modules
-node_modules/
+.vscode/
+static/recordings/

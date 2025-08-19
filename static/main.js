@@ -10,10 +10,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const stopRecordingButton = document.getElementById('stopRecording');
     const startTranscribeButton = document.getElementById('startTranscribe');
     const stopTranscribeButton = document.getElementById('stopTranscribe');
-    const authStatus = document.createElement('p');
-    authStatus.id = 'authStatus';
-    authStatus.innerText = '';
-    recordingsContainer.parentNode.insertBefore(authStatus, recordingsContainer);
     const transcriptionElement = document.getElementById('transcription');
     const recordingsContainer = document.getElementById('recordingsContainer');
     const toggleGoogleSpeechCheckbox = document.getElementById('toggleGoogleSpeech');
@@ -36,6 +32,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const parentNode = recordingsContainer && recordingsContainer.parentNode ? recordingsContainer.parentNode : document.body;
         const beforeNode = recordingsContainer && recordingsContainer.parentNode ? recordingsContainer : parentNode.firstChild;
         parentNode.insertBefore(testConnBtn, beforeNode);
+    }
+    let authStatus = document.getElementById('authStatus');
+    if (!authStatus) {
+        authStatus = document.createElement('p');
+        authStatus.id = 'authStatus';
+        authStatus.innerText = '';
+        const parentNode = recordingsContainer && recordingsContainer.parentNode ? recordingsContainer.parentNode : document.body;
+        const beforeNode = recordingsContainer && recordingsContainer.parentNode ? recordingsContainer : parentNode.firstChild;
+        parentNode.insertBefore(authStatus, recordingsContainer || beforeNode);
     }
 
     // This ensures CHUNK_SIZE is available from the backend-rendered script tag
