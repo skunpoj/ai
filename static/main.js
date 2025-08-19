@@ -19,7 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const recordingsContainer = document.getElementById('recordingsContainer');
     const fullContainer = document.getElementById('fullContainer') || recordingsContainer;
     const segmentContainer = document.getElementById('segmentContainer') || recordingsContainer;
-    const chunkContainer = document.getElementById('chunkContainer') || recordingsContainer;
+    const chunkContainer = null; // Removed redundant chunk UI
     const toggleGoogleSpeechCheckbox = document.getElementById('toggleGoogleSpeech');
     const segmentMsInput = document.getElementById('segmentMsInput');
     const segmentMsValue = document.getElementById('segmentMsValue');
@@ -125,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
             socket = new WebSocket(`${wsScheme}://${window.location.host}/ws_stream`);
 
             socket.onopen = () => {
-                console.log('Frontend: Direct WebSocket opened to /ws_test for audio streaming.');
+                console.log('Frontend: Direct WebSocket opened to /ws_stream for audio streaming.');
                 // MediaRecorder.start() will be called only after 'ready' signal from backend
                 try {
                     socket.send(JSON.stringify({ type: 'hello' }));
@@ -167,29 +167,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     transcriptionElement.innerText = `Transcription: ${data.transcript}`;
                     if (currentRecording) currentRecording.transcription = data.transcript;
                     // Do not attach transcripts to chunk rows; we show them per-segment
-                } else if (data.type === 'chunk_saved') {
-                    // Render chunk list below segment list
-                    console.log('Frontend: Server saved chunk:', data);
-                    const idx = data.idx;
-                    let segList = document.getElementById('segmentList');
-                    let chunkList = document.getElementById('chunkList');
-                    if (!chunkList) {
-                        chunkList = document.createElement('div');
-                        chunkList.id = 'chunkList';
-                        (chunkContainer || recordingsContainer).appendChild(chunkList);
-                        chunkList.style.display = 'flex';
-                        chunkList.style.flexWrap = 'wrap';
-                        chunkList.style.gap = '8px';
-                    }
-                    const entry = document.createElement('div');
-                    entry.id = `chunk-${idx}`;
-                    const when = (typeof data.ts === 'number') ? new Date(data.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
-                    entry.innerHTML = `${when} <span id="chunk-tx-${idx}"></span>`;
-                    entry.style.display = 'block';
-                    chunkList.appendChild(entry);
-                } else if (data.type === 'chunk_transcript') {
-                    const el = document.getElementById(`chunk-tx-${data.idx}`);
-                    if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : '';
+                } else if (data.type === 'chunk_saved' || data.type === 'chunk_transcript') {
+                    // Ignore chunk UI updates; chunks are internal
                 } else if (data.type === 'segment_saved') {
                     // Render single server-hosted playable audio per segment
                     let segList = document.getElementById('segmentList');
@@ -200,17 +179,27 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const existing = document.getElementById(`segment-${idx}`);
-                    const html = `Segment ${idx + 1}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a> <span id="segment-tx-${idx}"></span>`;
+                    const when = (typeof data.ts === 'number') ? new Date(data.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
+                    const html = `Segment ${idx + 1} — ${when}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a> <span id="segment-tx-${idx}" class="tx-google"></span> <span id="segment-tx-gem-${idx}" class="tx-gemini"></span>`;
                     if (existing) existing.innerHTML = html; else {
                         const segDiv = document.createElement('div');
                         segDiv.id = `segment-${idx}`;
                         segDiv.innerHTML = html;
                         segList.appendChild(segDiv);
                     }
+                    // Always show a simple status to confirm segment receipt
+                    const txEl = document.getElementById(`segment-tx-${idx}`);
+                    if (txEl && (!txEl.textContent || txEl.textContent.trim() === '')) {
+                        txEl.textContent = ' — uploaded';
+                    }
                 } else if (data.type === 'segment_transcript') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const el = document.getElementById(`segment-tx-${idx}`);
-                    if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : '';
+                    if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : ' — (no Google text)';
+                } else if (data.type === 'segment_transcript_gemini') {
+                    const idx = typeof data.id === 'number' ? data.id : data.idx;
+                    const el = document.getElementById(`segment-tx-gem-${idx}`);
+                    if (el) el.textContent = data.transcript ? ` — [Gemini] ${data.transcript}` : '';
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
                     const savedUrl = data.url;
