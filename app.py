@@ -39,7 +39,7 @@ STREAMING_LIMIT = 240000  # 4 minutes
 SAMPLE_RATE = 16000
 CHUNK_SIZE = int(SAMPLE_RATE / 10)  # 100ms worth of audio frames for backend processing
 CHUNK_MS = 250  # MediaRecorder timeslice in ms for frontend
-SEGMENT_MS = 3000  # Duration of a playable client-side segment
+SEGMENT_MS = 6000  # Default duration of a playable client-side segment (adjustable in UI)
 
 app, rt = fast_app(exts='ws') # Ensure 'exts='ws'' is present
 app.static_route_exts(prefix="/static", static_path="static") # Configure static files serving
@@ -68,9 +68,9 @@ if True:
                 json.loads(creds_content) # Validate JSON content
             
             global_speech_client = speech.SpeechClient()
-            # For WEBM_OPUS, do not force sample_rate_hertz; the container carries it (usually 48000).
+            # Prefer OGG_OPUS for streaming compatibility
             global_recognition_config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+                encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
                 language_code="en-US",
             )
             global_streaming_config = speech.StreamingRecognitionConfig(
@@ -263,6 +263,8 @@ async def ws_test(websocket: WebSocket):
                 
                 # prefer live toggle if provided; fallback to per-message flag
                 enable_google_speech = transcribe_enabled or message.get("enable_google_speech", False)
+                if mtype is None and "audio" in message:
+                    print(f"Backend: enable_google_speech flag on chunk: {enable_google_speech}")
                 audio_data_b64 = message.get("audio")
 
                 # Persist audio chunks to server file; forward to Google if enabled, also save per-chunk file
@@ -293,7 +295,7 @@ async def ws_test(websocket: WebSocket):
                                     try:
                                         def do_recognize():
                                             cfg = speech.RecognitionConfig(
-                                                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+                                                encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
                                                 language_code="en-US",
                                             )
                                             audio = speech.RecognitionAudio(content=chunk_bytes)
@@ -314,12 +316,14 @@ async def ws_test(websocket: WebSocket):
                         # Auto-start streaming recognizer if client is sending google_speech-enabled chunks
                         if enable_google_speech and not stream_started and (global_speech_client and global_streaming_config):
                             stream_started = True
+                            print("Backend: Auto-starting streaming recognizer due to enable flag on chunk.")
                             if stream_task is None:
                                 stream_task = asyncio.create_task(stream_to_google_and_send_to_frontend())
                         # Also forward bytes to streaming recognizer if active
                         if enable_google_speech and stream_started:
                             try:
                                 requests_q.put(decoded_chunk)
+                                print(f"Backend: queued {len(decoded_chunk)} bytes to streaming recognizer.")
                             except Exception:
                                 pass
                         chunk_index += 1
