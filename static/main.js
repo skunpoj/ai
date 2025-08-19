@@ -110,6 +110,17 @@ document.addEventListener('DOMContentLoaded', () => {
         // Transcription control is via buttons; default off at start
         enableGoogleSpeech = false;
         recordStartTs = Date.now();
+        // Pre-create current recording to avoid losing it if 'ready' arrives late
+        currentRecording = {
+            audioUrl: null,
+            serverUrl: null,
+            startTs: recordStartTs,
+            stopTs: null,
+            durationMs: null,
+            transcripts: { google: [], googleLive: [], vertex: [], gemini: [] }
+        };
+        recordings.push(currentRecording);
+        try { displayRecordings(); } catch(_) {}
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1, sampleRate: 48000 } });
