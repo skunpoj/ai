@@ -16,8 +16,10 @@ except Exception:
     gm = None
 try:
     from google import genai as genai_sdk  # Google Gen AI SDK (Vertex backend)
+    from google.genai import types as genai_types
 except Exception:
     genai_sdk = None
+    genai_types = None
 
 # Transcription is now controlled at runtime via Start/Stop Transcribe
 ENABLE_GOOGLE_SPEECH = True
@@ -417,7 +419,7 @@ async def ws_test(websocket: WebSocket):
                             asyncio.create_task(recognize_segment(decoded_seg, segment_index))
 
                         # Parallel: Vertex (service account) per-segment via Google Gen AI SDK
-                        if transcribe_enabled and global_vertex_client is not None:
+                        if transcribe_enabled and global_vertex_client is not None and genai_types is not None:
                             async def recognize_segment_vertex(segment_bytes: bytes, idx: int):
                                 try:
                                     loop = asyncio.get_running_loop()
@@ -434,12 +436,18 @@ async def ws_test(websocket: WebSocket):
                                                 if not mt:
                                                     continue
                                                 try:
+                                                    # Build contents with camelCase inlineData as per google-genai expectations
+                                                    b64 = base64.b64encode(segment_bytes).decode("ascii")
+                                                    contents = [{
+                                                        "role": "user",
+                                                        "parts": [
+                                                            {"inlineData": {"mimeType": mt, "data": b64}},
+                                                            {"text": "Transcribe the spoken audio to plain text. Return only the transcript."}
+                                                        ]
+                                                    }]
                                                     return global_vertex_client.models.generate_content(
                                                         model=VERTEX_GEMINI_MODEL,
-                                                        contents=[
-                                                            {"mime_type": mt, "data": segment_bytes},
-                                                            "Transcribe the spoken audio to plain text. Return only the transcript."
-                                                        ]
+                                                        contents=contents
                                                     )
                                                 except Exception as ie:
                                                     last_exc = ie
