@@ -68,9 +68,10 @@ if True:
                 json.loads(creds_content) # Validate JSON content
             
             global_speech_client = speech.SpeechClient()
-            # Match browser MediaRecorder default (often WebM Opus at ~48000 Hz)
+            # Use LINEAR16 PCM at 16kHz for streaming (matches working sample)
             global_recognition_config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=16000,
                 language_code="en-US",
             )
             global_streaming_config = speech.StreamingRecognitionConfig(
@@ -157,6 +158,8 @@ async def ws_test(websocket: WebSocket):
     # Queues to buffer audio chunks for Google Speech API
     # Use a standard Queue for the Google streaming call (which is synchronous)
     requests_q = queue.Queue()
+    # Optional PCM queue for LINEAR16 streaming if client sends raw pcm
+    pcm_requests_q = queue.Queue()
 
     # Prepare server-side recording file under static so it can be fetched later
     recordings_dir = os.path.join("static", "recordings")
@@ -276,6 +279,7 @@ async def ws_test(websocket: WebSocket):
                 if mtype is None and "audio" in message:
                     print(f"Backend: enable_google_speech flag on chunk: {enable_google_speech}")
                 audio_data_b64 = message.get("audio")
+                pcm_b64 = message.get("pcm16")
 
                 # Handle full segment uploads (each is a complete, playable WebM)
                 if message.get("type") == "segment" and audio_data_b64:
@@ -363,10 +367,17 @@ async def ws_test(websocket: WebSocket):
                         except Exception as e:
                             print(f"Backend: Failed to notify chunk_saved: {e}")
                         # Per-chunk recognition disabled to avoid noise; we rely on per-segment recognition.
-                        # Streaming recognizer disabled; rely on per-segment recognition only
+                        # If PCM streaming is enabled, prefer that; else rely on per-segment recognition
                         chunk_index += 1
                     except Exception as e:
                         print(f"Backend: Error decoding/writing audio chunk: {e}")
+                elif pcm_b64 and transcribe_enabled and global_speech_client and global_streaming_config:
+                    # Receive raw PCM16LE bytes from client for LINEAR16 streaming
+                    try:
+                        raw = base64.b64decode(pcm_b64)
+                        pcm_requests_q.put(raw)
+                    except Exception as e:
+                        print(f"Backend: Error decoding pcm16: {e}")
                 else:
                     print(f"Backend: Received non-audio/non-end_stream message from client (Google Enabled): {message}")
                     # Acknowledge if it's not an audio chunk or end_stream
@@ -393,7 +404,11 @@ async def ws_test(websocket: WebSocket):
 
         def request_generator_sync():
             while True:
-                item = requests_q.get()
+                # Prefer pcm if available
+                if not pcm_requests_q.empty():
+                    item = pcm_requests_q.get()
+                else:
+                    item = requests_q.get()
                 if item is None:
                     print("Backend: requests_q sentinel received, ending request_generator_sync.")
                     break

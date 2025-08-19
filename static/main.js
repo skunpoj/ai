@@ -94,6 +94,32 @@ document.addEventListener('DOMContentLoaded', () => {
             mediaRecorder = new MediaRecorder(stream, options);
             audioChunks = [];
 
+            // Build a WebAudio graph to gather 16kHz mono PCM for LINEAR16 streaming
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            const source = audioCtx.createMediaStreamSource(stream);
+            const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+            source.connect(processor);
+            processor.connect(audioCtx.destination);
+            processor.onaudioprocess = e => {
+                if (!enableGoogleSpeech || !socket || socket.readyState !== WebSocket.OPEN) return;
+                const input = e.inputBuffer.getChannelData(0);
+                // Convert float [-1,1] to 16-bit PCM LE
+                const pcm = new Int16Array(input.length);
+                for (let i = 0; i < input.length; i++) {
+                    let s = Math.max(-1, Math.min(1, input[i]));
+                    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                const bytes = new Uint8Array(pcm.buffer);
+                // Base64 encode in chunks
+                let bin = '';
+                const chunk = 0x8000;
+                for (let i = 0; i < bytes.length; i += chunk) {
+                    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                }
+                const b64 = btoa(bin);
+                try { socket.send(JSON.stringify({ pcm16: b64 })); } catch (_) {}
+            };
+
             // Connect WebSocket for streaming chunks BEFORE starting recorder to avoid sending to closed socket
             const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
             socket = new WebSocket(`${wsScheme}://${window.location.host}/ws_stream`);
