@@ -3,3 +3,4 @@ google-cloud-speech
 websockets # For potential future real-time audio streaming (optional for now)
 python-dotenv
 google-generativeai
+google-cloud-aiplatform

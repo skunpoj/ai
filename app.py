@@ -14,6 +14,13 @@ try:
     import google.generativeai as genai  # Optional Gemini support
 except Exception:
     genai = None
+try:
+    import vertexai  # Vertex AI SDK uses ADC/service accounts
+    from vertexai.generative_models import GenerativeModel, Part
+except Exception:
+    vertexai = None
+    GenerativeModel = None
+    Part = None
 
 # Transcription is now controlled at runtime via Start/Stop Transcribe
 ENABLE_GOOGLE_SPEECH = True
@@ -61,6 +68,7 @@ global_recognition_config = None
 global_streaming_config = None
 global_auth_info = None
 global_gemini_model = None
+global_vertex_model = None
 
 # Initialize Google client if credentials are present; otherwise stay None and we will notify on demand
 if True:
@@ -120,6 +128,26 @@ else:
         print("GEMINI_API_KEY not set; skipping Gemini parallel transcription.")
     if genai is None:
         print("google-generativeai not installed; skipping Gemini parallel transcription.")
+
+# Initialize Vertex AI Gemini using service account (ADC) if available
+vertex_project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+if not vertex_project and global_auth_info and global_auth_info.get("project_id"):
+    vertex_project = global_auth_info.get("project_id")
+vertex_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+if GenerativeModel is not None and vertex_project:
+    try:
+        vertexai.init(project=vertex_project, location=vertex_location)
+        # Use a generally available model suitable for transcription prompts
+        global_vertex_model = GenerativeModel("gemini-1.5-flash")
+        print(f"Vertex AI initialized for project={vertex_project} location={vertex_location}.")
+    except Exception as e:
+        print(f"Error initializing Vertex AI: {e}")
+        global_vertex_model = None
+else:
+    if GenerativeModel is None:
+        print("vertexai SDK not installed; skipping Vertex AI Gemini.")
+    elif not vertex_project:
+        print("GOOGLE_CLOUD_PROJECT not set and could not infer; skipping Vertex AI Gemini.")
 
 @rt("/") # Main application route
 def index():
@@ -366,8 +394,47 @@ async def ws_test(websocket: WebSocket):
                                     print(f"Backend: segment recognize error: {e}")
                             asyncio.create_task(recognize_segment(decoded_seg, segment_index))
 
-                        # Parallel: Gemini per-segment transcription if configured
-                        if global_gemini_model is not None:
+                        # Parallel: Gemini per-segment transcription using Vertex (service account) preferred
+                        if global_vertex_model is not None and Part is not None:
+                            async def recognize_segment_vertex(segment_bytes: bytes, idx: int):
+                                try:
+                                    loop = asyncio.get_running_loop()
+                                    def do_vertex():
+                                        try:
+                                            # Try WEBM first; if not supported, fall back to OGG
+                                            try:
+                                                return global_vertex_model.generate_content([
+                                                    Part.from_data(data=segment_bytes, mime_type="audio/webm"),
+                                                    "Transcribe the spoken audio to plain text. Return only the transcript."
+                                                ])
+                                            except Exception:
+                                                return global_vertex_model.generate_content([
+                                                    Part.from_data(data=segment_bytes, mime_type="audio/ogg"),
+                                                    "Transcribe the spoken audio to plain text. Return only the transcript."
+                                                ])
+                                        except Exception as e:
+                                            raise e
+                                    resp = await loop.run_in_executor(None, do_vertex)
+                                    text = ""
+                                    try:
+                                        text = (resp.text or "").strip()
+                                    except Exception:
+                                        text = ""
+                                    try:
+                                        await websocket.send_json({
+                                            "type": "segment_transcript_gemini",
+                                            "idx": idx,
+                                            "transcript": text,
+                                            "id": client_id,
+                                            "ts": client_ts
+                                        })
+                                    except Exception:
+                                        pass
+                                except Exception as e:
+                                    print(f"Backend: Vertex Gemini segment recognize error: {e}")
+                            asyncio.create_task(recognize_segment_vertex(decoded_seg, segment_index))
+                        elif global_gemini_model is not None:
+                            # Fallback to API-key google-generativeai if Vertex not configured
                             async def recognize_segment_gemini(segment_bytes: bytes, idx: int):
                                 try:
                                     loop = asyncio.get_running_loop()
