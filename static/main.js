@@ -135,12 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     console.log('Frontend: Received transcription:', data.transcript);
                     transcriptionElement.innerText = `Transcription: ${data.transcript}`;
                     if (currentRecording) currentRecording.transcription = data.transcript;
-                    // If there is a per-chunk entry, append transcript to it
-                    const chunkList = document.getElementById('chunkList');
-                    if (chunkList) {
-                        const lastChunk = chunkList.querySelector('div:last-child span[id^="chunk-tx-"]');
-                        if (lastChunk) lastChunk.textContent = ` — ${data.transcript}`;
-                    }
+                    // Do not attach transcripts to chunk rows; we show them per-segment
                 } else if (data.type === 'chunk_saved') {
                     // Render chunk list below segment list
                     console.log('Frontend: Server saved chunk:', data);
@@ -172,7 +167,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         segList.id = 'segmentList';
                         recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
                     }
-                    const idx = data.idx;
+                    const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const existing = document.getElementById(`segment-${idx}`);
                     const html = `Segment ${idx + 1}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a> <span id="segment-tx-${idx}"></span>`;
                     if (existing) existing.innerHTML = html; else {
@@ -182,7 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         segList.appendChild(segDiv);
                     }
                 } else if (data.type === 'segment_transcript') {
-                    const el = document.getElementById(`segment-tx-${data.idx}`);
+                    const idx = typeof data.id === 'number' ? data.id : data.idx;
+                    const el = document.getElementById(`segment-tx-${idx}`);
                     if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : '';
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
