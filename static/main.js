@@ -100,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
         stopTranscribeButton.disabled = true;
         transcriptionElement.innerText = "Transcription: ";
         // Do NOT clear previous full recordings; keep history visible
+        // Keep existing full recordings visible; only clear segments UI for the new session
         if (segmentContainer) segmentContainer.innerHTML = '';
         if (chunkContainer) chunkContainer.innerHTML = '';
         if (liveTranscriptContainer) liveTranscriptContainer.innerHTML = '';
@@ -356,6 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!event.data || event.data.size === 0) return;
                 console.log('Frontend: Segment available:', event.data.size, 'bytes');
                 const segBlob = event.data;
+                try { audioChunks.push(segBlob); } catch(_) {}
                 const ts = Date.now();
                 let segList = document.getElementById('segmentList');
                 if (!segList) {
