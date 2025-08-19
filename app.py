@@ -68,7 +68,7 @@ global_streaming_config = None
 global_auth_info = None
 global_gemini_model = None
 global_vertex_client = None
-VERTEX_GEMINI_MODEL = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-1.5-flash")
+VERTEX_GEMINI_MODEL = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash")
 
 # Initialize Google client if credentials are present; otherwise stay None and we will notify on demand
 if True:
@@ -166,28 +166,34 @@ def index():
             Div(
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
+                Button("Segment length", id="openSegmentModal"),
             ),
             # Status + outputs
             P("Transcription: ", id="transcription"),
             Div(id="liveTranscriptContainer"),
+            # Segment length modal (hidden by default)
             Div(
-                Label("Segment length:", _for="segmentLenGroup"),
                 Div(
-                    Input(type="radio", name="segmentLen", id="seg5", value="5000"), Label("5s", _for="seg5"),
-                    Input(type="radio", name="segmentLen", id="seg10", value="10000", checked=True), Label("10s", _for="seg10"),
-                    Input(type="radio", name="segmentLen", id="seg30", value="30000"), Label("30s", _for="seg30"),
-                    Input(type="radio", name="segmentLen", id="seg45", value="45000"), Label("45s", _for="seg45"),
-                    Input(type="radio", name="segmentLen", id="seg60", value="60000"), Label("60s", _for="seg60"),
-                    Input(type="radio", name="segmentLen", id="seg90", value="90000"), Label("90s", _for="seg90"),
-                    Input(type="radio", name="segmentLen", id="seg120", value="120000"), Label("120s", _for="seg120"),
-                    Input(type="radio", name="segmentLen", id="seg150", value="150000"), Label("150s", _for="seg150"),
-                    Input(type="radio", name="segmentLen", id="seg180", value="180000"), Label("180s", _for="seg180"),
-                    id="segmentLenGroup"
-                ),
-            ),
+                    H3("Segment length"),
+                    Div(
+                        Input(type="radio", name="segmentLen", id="seg5", value="5000"), Label("5s", _for="seg5"),
+                        Input(type="radio", name="segmentLen", id="seg10", value="10000", checked=True), Label("10s", _for="seg10"),
+                        Input(type="radio", name="segmentLen", id="seg30", value="30000"), Label("30s", _for="seg30"),
+                        Input(type="radio", name="segmentLen", id="seg45", value="45000"), Label("45s", _for="seg45"),
+                        Input(type="radio", name="segmentLen", id="seg60", value="60000"), Label("60s", _for="seg60"),
+                        Input(type="radio", name="segmentLen", id="seg90", value="90000"), Label("90s", _for="seg90"),
+                        Input(type="radio", name="segmentLen", id="seg120", value="120000"), Label("120s", _for="seg120"),
+                        Input(type="radio", name="segmentLen", id="seg150", value="150000"), Label("150s", _for="seg150"),
+                        Input(type="radio", name="segmentLen", id="seg180", value="180000"), Label("180s", _for="seg180"),
+                        id="segmentLenGroup"
+                    ),
+                    Button("Close", id="closeSegmentModal"),
+                , id="segmentModalContent", style="background:#222;padding:16px;border:1px solid #444;max-width:480px;margin:10% auto")
+            , id="segmentModal", style="display:none;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999"),
             Div(
                 H2("Full Recording"),
-                Div(id="fullContainer")
+                Div(id="fullContainer"),
+                Div(id="fullTranscriptContainer")
             ),
             Div(
                 H2("Segments"),
