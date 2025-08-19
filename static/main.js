@@ -89,11 +89,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            // Prefer OGG Opus for better standalone segment playability; fallback to WebM Opus
+            // Prefer WebM Opus for widest browser support; fallback to OGG Opus
             const preferredTypes = [
-                'audio/ogg;codecs=opus',
                 'audio/webm;codecs=opus',
-                'audio/webm'
+                'audio/webm',
+                'audio/ogg;codecs=opus'
             ];
             let recOptions = {};
             let recMimeType = '';
@@ -191,13 +191,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
                     const existing = document.getElementById(`segment-${idx}`);
                     const when = (typeof data.ts === 'number') ? new Date(data.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
-                    const html = `Segment ${idx + 1} — ${when}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a> <span id="segment-tx-${idx}" class="tx-google"></span> <span id="segment-tx-vertex-${idx}" class="tx-vertex"></span> <span id="segment-tx-gem-${idx}" class="tx-gemini"></span>`;
+                    const mime = (typeof data.mime === 'string' && data.mime) ? data.mime : (String(data.url).endsWith('.ogg') ? 'audio/ogg' : 'audio/webm');
+                    const html = `Segment ${idx + 1} — ${when}: <audio controls id="segment-audio-${idx}"><source src="${data.url}" type="${mime}"></audio> <a href="${data.url}" download>Download</a> <span id="segment-tx-${idx}" class="tx-google"></span> <span id="segment-tx-vertex-${idx}" class="tx-vertex"></span> <span id="segment-tx-gem-${idx}" class="tx-gemini"></span>`;
                     if (existing) existing.innerHTML = html; else {
                         const segDiv = document.createElement('div');
                         segDiv.id = `segment-${idx}`;
                         segDiv.innerHTML = html;
                         segList.appendChild(segDiv);
                     }
+                    const audioEl = document.getElementById(`segment-audio-${idx}`);
+                    try { if (audioEl) audioEl.load(); } catch(_) {}
                     // Always show a simple status to confirm segment receipt
                     const txEl = document.getElementById(`segment-tx-${idx}`);
                     if (txEl && (!txEl.textContent || txEl.textContent.trim() === '')) {
