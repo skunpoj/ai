@@ -1,6 +1,10 @@
 document.addEventListener('DOMContentLoaded', () => {
-    let mediaRecorder;
+    let mediaRecorder; // Continuous full recorder
     let audioChunks = [];
+    let fullRecorder; // alias for clarity; use mediaRecorder as full recorder
+    let fullChunks = [];
+    let segmentRecorder = null;
+    let segmentLoopActive = false;
     let socket;
     let recordings = []; // Array of {audioUrl, serverUrl, startTs, stopTs, durationMs, transcripts}
     let currentRecording = null; // Active recording object
@@ -138,8 +142,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             currentStream = stream;
+            // Full recorder (continuous) collects fullChunks for final full recording
             mediaRecorder = new MediaRecorder(currentStream, recOptions);
-            audioChunks = [];
+            fullChunks = [];
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data && e.data.size) fullChunks.push(e.data);
+            };
 
             // Build a WebAudio graph to gather 16kHz mono PCM for LINEAR16 streaming
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
@@ -183,8 +191,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
-                // Use native timeslice; each ondataavailable blob is a self-contained segment
-                try { mediaRecorder.start(segmentMs); console.log('Frontend: MediaRecorder started with segmentMs:', segmentMs); } catch (e) { console.warn('Frontend: start on open failed:', e); }
+                // Start continuous full recorder
+                try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); } catch (e) { console.warn('Frontend: start on open failed:', e); }
+                // Start per-segment recorder loop to guarantee fresh headers/footers per segment
+                startSegmentLoop();
             };
 
             socket.onmessage = event => {
@@ -358,45 +368,52 @@ document.addEventListener('DOMContentLoaded', () => {
                 return btoa(chunks.join(''));
             }
 
-            mediaRecorder.ondataavailable = async event => {
-                // Each event is a complete, standalone segment (timeslice mode)
-                if (!event.data || event.data.size < 2048) return; // skip too-small blobs
-                console.log('Frontend: Segment available:', event.data.size, 'bytes');
-                const segBlob = event.data;
-                try { audioChunks.push(segBlob); } catch(_) {}
-                const ts = Date.now();
-                let segList = document.getElementById('segmentList');
-                if (!segList) {
-                    segList = document.createElement('div');
-                    segList.id = 'segmentList';
-                    (segmentContainer || recordingsContainer).appendChild(segList);
-                }
-                const entry = document.createElement('div');
-                entry.id = `segment-${ts}`;
-                entry.textContent = `${new Date(ts).toLocaleTimeString()} — uploading...`;
-                segList.appendChild(entry);
-                try {
-                    if (socket.readyState === WebSocket.OPEN) {
-                        const arrayBuffer = await segBlob.arrayBuffer();
-                        const b64seg = arrayBufferToBase64(arrayBuffer);
-                        socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts, mime: segBlob.type }));
-                    }
-                } catch (e) { console.warn('Frontend: failed to send segment blob', e); }
-            };
+            function startSegmentLoop() {
+                if (segmentLoopActive) return;
+                segmentLoopActive = true;
+                const loopOnce = () => {
+                    if (!segmentLoopActive) return;
+                    const ts = Date.now();
+                    try { segmentRecorder = new MediaRecorder(currentStream, recOptions); } catch (e) { console.warn('Frontend: segmentRecorder create failed:', e); segmentLoopActive = false; return; }
+                    let segBlob = null;
+                    segmentRecorder.ondataavailable = (e) => { if (e.data && e.data.size) segBlob = e.data; };
+                    segmentRecorder.onstop = async () => {
+                        if (segBlob && segBlob.size) {
+                            console.log('Frontend: Segment available:', segBlob.size, 'bytes');
+                            let segList = document.getElementById('segmentList');
+                            if (!segList) {
+                                segList = document.createElement('div');
+                                segList.id = 'segmentList';
+                                (segmentContainer || recordingsContainer).appendChild(segList);
+                            }
+                            const entry = document.createElement('div');
+                            entry.id = `segment-${ts}`;
+                            entry.textContent = `${new Date(ts).toLocaleTimeString()} — uploading...`;
+                            segList.appendChild(entry);
+                            try {
+                                if (socket.readyState === WebSocket.OPEN) {
+                                    const arrayBuffer = await segBlob.arrayBuffer();
+                                    const b64seg = arrayBufferToBase64(arrayBuffer);
+                                    socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts, mime: segBlob.type }));
+                                }
+                            } catch (_) {}
+                        }
+                        if (segmentLoopActive) setTimeout(loopOnce, 0);
+                    };
+                    try { segmentRecorder.start(); } catch (e) { console.warn('Frontend: segmentRecorder start failed:', e); segmentLoopActive = false; return; }
+                    setTimeout(() => { try { if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch (_) {} }, segmentMs);
+                };
+                loopOnce();
+            }
+
+            function stopSegmentLoop() {
+                segmentLoopActive = false;
+                try { if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch (_) {}
+            }
 
             mediaRecorder.onstop = async () => {
                 console.log('Frontend: MediaRecorder stopped.');
-                if (segmentRotate) {
-                    segmentRotate = false;
-                    // Restart with new segmentMs timeslice
-                    try {
-                        mediaRecorder = new MediaRecorder(currentStream, recOptions);
-                        mediaRecorder.ondataavailable = arguments.callee.bind(null);
-                        mediaRecorder.start(segmentMs);
-                        console.log('Frontend: MediaRecorder restarted with segmentMs:', segmentMs);
-                    } catch (e) { console.warn('Frontend: restart failed:', e); }
-                    return;
-                }
+                if (segmentRotate) { segmentRotate = false; stopSegmentLoop(); startSegmentLoop(); return; }
                 const stopTs = Date.now();
                 if (currentRecording) { currentRecording.stopTs = stopTs; currentRecording.durationMs = stopTs - (currentRecording.startTs || stopTs); }
                 if (socket.readyState === WebSocket.OPEN) {
@@ -409,13 +426,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     }, 1500);
                 }
 
-                const audioBlob = new Blob(audioChunks, { type: recMimeType || 'audio/webm' });
+                stopSegmentLoop();
+                const audioBlob = new Blob(fullChunks, { type: recMimeType || 'audio/webm' });
                 const audioUrl = URL.createObjectURL(audioBlob);
                 console.log('Frontend: Generated audio URL:', audioUrl);
 
                 // Finalize single-session recording
                 if (currentRecording) {
                     currentRecording.audioUrl = audioUrl;
+                    currentRecording.clientSizeBytes = audioBlob.size;
                     console.log('Frontend: Updated current recording with audioUrl:', currentRecording);
                 }
                 displayRecordings(); // Display recordings with the new audio player
