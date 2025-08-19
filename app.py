@@ -285,6 +285,30 @@ async def ws_test(websocket: WebSocket):
                             await websocket.send_json({"type": "segment_saved", "idx": segment_index, "url": seg_url})
                         except Exception:
                             pass
+                        # Optionally recognize this segment when transcribe is enabled and client ready
+                        if transcribe_enabled and (global_speech_client and global_streaming_config):
+                            loop = asyncio.get_running_loop()
+                            async def recognize_segment(segment_bytes: bytes, idx: int):
+                                try:
+                                    def do_recognize():
+                                        cfg = speech.RecognitionConfig(
+                                            encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+                                            sample_rate_hertz=48000,
+                                            language_code="en-US",
+                                        )
+                                        audio = speech.RecognitionAudio(content=segment_bytes)
+                                        return global_speech_client.recognize(config=cfg, audio=audio)
+                                    resp = await loop.run_in_executor(None, do_recognize)
+                                    transcript_text = ""
+                                    if resp.results and resp.results[0].alternatives:
+                                        transcript_text = resp.results[0].alternatives[0].transcript or ""
+                                    try:
+                                        await websocket.send_json({"type": "segment_transcript", "idx": idx, "transcript": transcript_text})
+                                    except Exception:
+                                        pass
+                                except Exception as e:
+                                    print(f"Backend: segment recognize error: {e}")
+                            asyncio.create_task(recognize_segment(decoded_seg, segment_index))
                         segment_index += 1
                     except Exception as e:
                         print(f"Backend: Error saving segment: {e}")
