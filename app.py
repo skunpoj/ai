@@ -39,6 +39,7 @@ STREAMING_LIMIT = 240000  # 4 minutes
 SAMPLE_RATE = 16000
 CHUNK_SIZE = int(SAMPLE_RATE / 10)  # 100ms worth of audio frames for backend processing
 CHUNK_MS = 250  # MediaRecorder timeslice in ms for frontend
+SEGMENT_MS = 3000  # Duration of a playable client-side segment
 
 app, rt = fast_app(exts='ws') # Ensure 'exts='ws'' is present
 app.static_route_exts(prefix="/static", static_path="static") # Configure static files serving
@@ -117,8 +118,15 @@ def index():
             ),
             # Status + outputs
             P("Transcription: ", id="transcription"),
+            Div(
+                Label("Segment length (ms): ", _for="segmentMsInput"),
+                Input(type="range", id="segmentMsInput", min="1000", max="10000", value=str(SEGMENT_MS), step="250"),
+                Span(str(SEGMENT_MS), id="segmentMsValue"),
+            ),
             Div(id="recordingsContainer"),
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
+            Script(f"let SEGMENT_MS = {SEGMENT_MS};"),
+            Script("window.SEGMENT_MS = SEGMENT_MS;"),
             # Log redacted Google auth info on page load
             Script(
                 f"window.GOOGLE_AUTH_INFO = {json.dumps(global_auth_info or {})};\n"
