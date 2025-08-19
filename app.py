@@ -68,9 +68,9 @@ if True:
                 json.loads(creds_content) # Validate JSON content
             
             global_speech_client = speech.SpeechClient()
-            # Prefer OGG_OPUS for streaming; explicitly set sample rate (browser MediaRecorder is typically 48000)
+            # Match browser MediaRecorder default (often WebM Opus at ~48000 Hz)
             global_recognition_config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
+                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
                 sample_rate_hertz=48000,
                 language_code="en-US",
             )
@@ -160,6 +160,10 @@ async def ws_test(websocket: WebSocket):
     session_chunks_dir = os.path.join(recordings_dir, f"session_{session_ts}")
     os.makedirs(session_chunks_dir, exist_ok=True)
     chunk_index = 0
+    # Directory for full segments (standalone playable)
+    session_segments_dir = os.path.join(recordings_dir, f"session_{session_ts}")
+    os.makedirs(session_segments_dir, exist_ok=True)
+    segment_index = 0
 
     # Task to continuously receive messages from frontend
     async def receive_from_frontend():
@@ -268,6 +272,24 @@ async def ws_test(websocket: WebSocket):
                     print(f"Backend: enable_google_speech flag on chunk: {enable_google_speech}")
                 audio_data_b64 = message.get("audio")
 
+                # Handle full segment uploads (each is a complete, playable WebM)
+                if message.get("type") == "segment" and audio_data_b64:
+                    try:
+                        nonlocal segment_index
+                        decoded_seg = base64.b64decode(audio_data_b64)
+                        seg_path = os.path.join(session_segments_dir, f"segment_{segment_index}.webm")
+                        with open(seg_path, "wb") as sf:
+                            sf.write(decoded_seg)
+                        seg_url = f"/static/recordings/session_{session_ts}/segment_{segment_index}.webm"
+                        try:
+                            await websocket.send_json({"type": "segment_saved", "idx": segment_index, "url": seg_url})
+                        except Exception:
+                            pass
+                        segment_index += 1
+                    except Exception as e:
+                        print(f"Backend: Error saving segment: {e}")
+                    continue
+
                 # Persist audio chunks to server file; forward to Google if enabled, also save per-chunk file
                 if audio_data_b64:
                     try:
@@ -276,9 +298,9 @@ async def ws_test(websocket: WebSocket):
                         print(f"Backend: Decoded audio chunk bytes={len(decoded_chunk)}")
                         server_file.write(decoded_chunk)
                         server_file.flush()
-                        # Save per-chunk file
+                        # Save per-chunk file as standalone playable WebM
                         chunk_path = os.path.join(session_chunks_dir, f"chunk_{chunk_index}.webm")
-                        with open(chunk_path, "ab") as cf:
+                        with open(chunk_path, "wb") as cf:
                             cf.write(decoded_chunk)
                         chunk_url = f"/static/recordings/session_{session_ts}/chunk_{chunk_index}.webm"
                         try:
@@ -296,7 +318,7 @@ async def ws_test(websocket: WebSocket):
                                     try:
                                         def do_recognize():
                                             cfg = speech.RecognitionConfig(
-                                                encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
+                                                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
                                                 sample_rate_hertz=48000,
                                                 language_code="en-US",
                                             )

@@ -84,7 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const preferredType = 'audio/ogg; codecs=opus';
+            const preferredType = 'audio/webm; codecs=opus';
             const options = (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(preferredType)) ? { mimeType: preferredType } : {};
             mediaRecorder = new MediaRecorder(stream, options);
             audioChunks = [];
@@ -185,6 +185,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (data.type === 'chunk_transcript') {
                     const el = document.getElementById(`chunk-tx-${data.idx}`);
                     if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : '';
+                } else if (data.type === 'segment_saved') {
+                    // Render server-hosted playable audio for the saved segment
+                    let segList = document.getElementById('chunkList');
+                    if (!segList) {
+                        segList = document.createElement('div');
+                        segList.id = 'chunkList';
+                        recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
+                    }
+                    const idx = data.idx;
+                    const segDiv = document.createElement('div');
+                    segDiv.id = `segment-server-${idx}`;
+                    segDiv.innerHTML = `Server Segment ${idx + 1}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a>`;
+                    segList.appendChild(segDiv);
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
                     const savedUrl = data.url;
@@ -270,7 +283,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         entry.id = `segment-${idx}`;
                         entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio> <a href="${segUrl}" download="segment_${idx + 1}.webm">Download</a>`;
                         segList.appendChild(entry);
-                    } catch (e) { console.warn('Frontend: failed to create segment blob', e); }
+                        // Also upload the segment to server so it is playable from server
+                        if (socket.readyState === WebSocket.OPEN) {
+                            const arrayBuffer = await segBlob.arrayBuffer();
+                            const b64seg = arrayBufferToBase64(arrayBuffer);
+                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg }));
+                        }
+                    } catch (e) { console.warn('Frontend: failed to create/send segment blob', e); }
                     segmentBuffer = [];
                     segmentStartTs = now;
                 }
@@ -306,6 +325,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         entry.id = `segment-${idx}`;
                         entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio> <a href="${segUrl}" download="segment_${idx + 1}.webm">Download</a>`;
                         segList.appendChild(entry);
+                        // Upload final segment to server
+                        if (socket.readyState === WebSocket.OPEN) {
+                            const arrayBuffer = await segBlob.arrayBuffer();
+                            const b64seg = arrayBufferToBase64(arrayBuffer);
+                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg }));
+                        }
                     } catch (e) { console.warn('Frontend: failed to flush segment', e); }
                     segmentBuffer = [];
                     segmentStartTs = null;
