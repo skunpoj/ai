@@ -11,16 +11,13 @@ import time
 import asyncio
 from google.cloud import speech
 try:
-    import google.generativeai as genai  # Optional Gemini support
+    import google.generativeai as gm  # Consumer Gemini (API key)
 except Exception:
-    genai = None
+    gm = None
 try:
-    import vertexai  # Vertex AI SDK uses ADC/service accounts
-    from vertexai.generative_models import GenerativeModel, Part
+    from google import genai as genai_sdk  # Google Gen AI SDK (Vertex backend)
 except Exception:
-    vertexai = None
-    GenerativeModel = None
-    Part = None
+    genai_sdk = None
 
 # Transcription is now controlled at runtime via Start/Stop Transcribe
 ENABLE_GOOGLE_SPEECH = True
@@ -50,7 +47,7 @@ STREAMING_LIMIT = 240000  # 4 minutes
 SAMPLE_RATE = 16000
 CHUNK_SIZE = int(SAMPLE_RATE / 10)  # 100ms worth of audio frames for backend processing
 CHUNK_MS = 250  # MediaRecorder timeslice in ms for frontend
-SEGMENT_MS = 6000  # Default duration of a playable client-side segment (adjustable in UI)
+SEGMENT_MS = 10000  # Default duration of a playable client-side segment (10 seconds)
 
 app, rt = fast_app(exts='ws') # Ensure 'exts='ws'' is present
 app.static_route_exts(prefix="/static", static_path="static") # Configure static files serving
@@ -68,7 +65,8 @@ global_recognition_config = None
 global_streaming_config = None
 global_auth_info = None
 global_gemini_model = None
-global_vertex_model = None
+global_vertex_client = None
+VERTEX_GEMINI_MODEL = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash")
 
 # Initialize Google client if credentials are present; otherwise stay None and we will notify on demand
 if True:
@@ -114,11 +112,11 @@ if True:
 
 # Initialize Gemini model if API key is present and library available
 gemini_api_key = os.environ.get("GEMINI_API_KEY")
-if gemini_api_key and genai is not None:
+if gemini_api_key and gm is not None:
     try:
-        genai.configure(api_key=gemini_api_key)
-        # Lightweight model is sufficient for transcription-style prompts
-        global_gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+        gm.configure(api_key=gemini_api_key)
+        # Use latest model for transcription prompts
+        global_gemini_model = gm.GenerativeModel("gemini-2.5-flash")
         print("Gemini model initialized for parallel transcription.")
     except Exception as e:
         print(f"Error initializing Gemini: {e}")
@@ -126,26 +124,24 @@ if gemini_api_key and genai is not None:
 else:
     if not gemini_api_key:
         print("GEMINI_API_KEY not set; skipping Gemini parallel transcription.")
-    if genai is None:
+    if gm is None:
         print("google-generativeai not installed; skipping Gemini parallel transcription.")
 
-# Initialize Vertex AI Gemini using service account (ADC) if available
+# Initialize Vertex AI Gemini using Google Gen AI SDK (Vertex backend) if available
 vertex_project = os.environ.get("GOOGLE_CLOUD_PROJECT")
 if not vertex_project and global_auth_info and global_auth_info.get("project_id"):
     vertex_project = global_auth_info.get("project_id")
 vertex_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-if GenerativeModel is not None and vertex_project:
+if genai_sdk is not None and vertex_project:
     try:
-        vertexai.init(project=vertex_project, location=vertex_location)
-        # Use a generally available model suitable for transcription prompts
-        global_vertex_model = GenerativeModel("gemini-1.5-flash")
-        print(f"Vertex AI initialized for project={vertex_project} location={vertex_location}.")
+        global_vertex_client = genai_sdk.Client(vertexai=True, project=vertex_project, location=vertex_location)
+        print(f"Google Gen AI SDK (Vertex backend) initialized for project={vertex_project} location={vertex_location}.")
     except Exception as e:
-        print(f"Error initializing Vertex AI: {e}")
-        global_vertex_model = None
+        print(f"Error initializing Google Gen AI SDK (Vertex backend): {e}")
+        global_vertex_client = None
 else:
-    if GenerativeModel is None:
-        print("vertexai SDK not installed; skipping Vertex AI Gemini.")
+    if genai_sdk is None:
+        print("google-genai SDK not installed; skipping Vertex AI Gemini.")
     elif not vertex_project:
         print("GOOGLE_CLOUD_PROJECT not set and could not infer; skipping Vertex AI Gemini.")
 
@@ -170,9 +166,19 @@ def index():
             # Status + outputs
             P("Transcription: ", id="transcription"),
             Div(
-                Label("Segment length (ms): ", _for="segmentMsInput"),
-                Input(type="range", id="segmentMsInput", min="1000", max="10000", value=str(SEGMENT_MS), step="250"),
-                Span(str(SEGMENT_MS), id="segmentMsValue"),
+                Label("Segment length:", _for="segmentLenGroup"),
+                Div(
+                    Input(type="radio", name="segmentLen", id="seg5", value="5000"), Label("5s", _for="seg5"),
+                    Input(type="radio", name="segmentLen", id="seg10", value="10000", checked=True), Label("10s", _for="seg10"),
+                    Input(type="radio", name="segmentLen", id="seg30", value="30000"), Label("30s", _for="seg30"),
+                    Input(type="radio", name="segmentLen", id="seg45", value="45000"), Label("45s", _for="seg45"),
+                    Input(type="radio", name="segmentLen", id="seg60", value="60000"), Label("60s", _for="seg60"),
+                    Input(type="radio", name="segmentLen", id="seg90", value="90000"), Label("90s", _for="seg90"),
+                    Input(type="radio", name="segmentLen", id="seg120", value="120000"), Label("120s", _for="seg120"),
+                    Input(type="radio", name="segmentLen", id="seg150", value="150000"), Label("150s", _for="seg150"),
+                    Input(type="radio", name="segmentLen", id="seg180", value="180000"), Label("180s", _for="seg180"),
+                    id="segmentLenGroup"
+                ),
             ),
             Div(
                 H2("Full Recording"),
@@ -402,8 +408,8 @@ async def ws_test(websocket: WebSocket):
                                     print(f"Backend: segment recognize error: {e}")
                             asyncio.create_task(recognize_segment(decoded_seg, segment_index))
 
-                        # Parallel: Vertex (service account) per-segment
-                        if transcribe_enabled and global_vertex_model is not None and Part is not None:
+                        # Parallel: Vertex (service account) per-segment via Google Gen AI SDK
+                        if transcribe_enabled and global_vertex_client is not None:
                             async def recognize_segment_vertex(segment_bytes: bytes, idx: int):
                                 try:
                                     loop = asyncio.get_running_loop()
@@ -411,15 +417,21 @@ async def ws_test(websocket: WebSocket):
                                         try:
                                             # Try WEBM first; if not supported, fall back to OGG
                                             try:
-                                                return global_vertex_model.generate_content([
-                                                    Part.from_data(data=segment_bytes, mime_type="audio/webm"),
-                                                    "Transcribe the spoken audio to plain text. Return only the transcript."
-                                                ])
+                                                return global_vertex_client.models.generate_content(
+                                                    model=VERTEX_GEMINI_MODEL,
+                                                    contents=[
+                                                        {"mime_type": "audio/webm", "data": segment_bytes},
+                                                        "Transcribe the spoken audio to plain text. Return only the transcript."
+                                                    ]
+                                                )
                                             except Exception:
-                                                return global_vertex_model.generate_content([
-                                                    Part.from_data(data=segment_bytes, mime_type="audio/ogg"),
-                                                    "Transcribe the spoken audio to plain text. Return only the transcript."
-                                                ])
+                                                return global_vertex_client.models.generate_content(
+                                                    model=VERTEX_GEMINI_MODEL,
+                                                    contents=[
+                                                        {"mime_type": "audio/ogg", "data": segment_bytes},
+                                                        "Transcribe the spoken audio to plain text. Return only the transcript."
+                                                    ]
+                                                )
                                         except Exception as e:
                                             raise e
                                     resp = await loop.run_in_executor(None, do_vertex)
@@ -439,7 +451,7 @@ async def ws_test(websocket: WebSocket):
                                     except Exception:
                                         pass
                                 except Exception as e:
-                                    print(f"Backend: Vertex Gemini segment recognize error: {e}")
+                                    print(f"Backend: Vertex (google-genai) segment recognize error: {e}")
                             asyncio.create_task(recognize_segment_vertex(decoded_seg, segment_index))
                         # Parallel: Gemini API-key per-segment
                         if transcribe_enabled and global_gemini_model is not None:
