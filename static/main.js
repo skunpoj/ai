@@ -306,7 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (socket.readyState === WebSocket.OPEN) {
                             const arrayBuffer = await segBlob.arrayBuffer();
                             const b64seg = arrayBufferToBase64(arrayBuffer);
-                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts }));
+                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts, mime: segBlob.type }));
                         }
                     } catch (e) { console.warn('Frontend: failed to create/send segment blob', e); }
                     segmentBuffer = [];
@@ -337,7 +337,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (socket.readyState === WebSocket.OPEN) {
                             const arrayBuffer = await segBlob.arrayBuffer();
                             const b64seg = arrayBufferToBase64(arrayBuffer);
-                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts }));
+                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts, mime: segBlob.type }));
                         }
                     } catch (e) { console.warn('Frontend: failed to flush segment', e); }
                     segmentBuffer = [];

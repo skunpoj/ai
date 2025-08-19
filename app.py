@@ -333,15 +333,17 @@ async def ws_test(websocket: WebSocket):
                 audio_data_b64 = message.get("audio")
                 pcm_b64 = message.get("pcm16")
 
-                # Handle full segment uploads (each is a complete, playable WebM)
+                # Handle full segment uploads (each is a complete, playable audio container)
                 if message.get("type") == "segment" and audio_data_b64:
                     try:
                         nonlocal segment_index
                         decoded_seg = base64.b64decode(audio_data_b64)
-                        seg_path = os.path.join(session_segments_dir, f"segment_{segment_index}.webm")
+                        client_mime = (message.get("mime") or "").lower()
+                        seg_ext = "ogg" if ("ogg" in client_mime) else "webm"
+                        seg_path = os.path.join(session_segments_dir, f"segment_{segment_index}.{seg_ext}")
                         with open(seg_path, "wb") as sf:
                             sf.write(decoded_seg)
-                        seg_url = f"/static/recordings/session_{session_ts}/segment_{segment_index}.webm"
+                        seg_url = f"/static/recordings/session_{session_ts}/segment_{segment_index}.{seg_ext}"
                         client_id = message.get("id")
                         client_ts = message.get("ts") or get_current_time()
                         try:
@@ -351,7 +353,9 @@ async def ws_test(websocket: WebSocket):
                                 "url": seg_url,
                                 "id": client_id,
                                 "ts": client_ts,
-                                "status": "ws_ok"
+                                "status": "ws_ok",
+                                "ext": seg_ext,
+                                "mime": client_mime
                             })
                         except Exception:
                             pass
@@ -374,7 +378,11 @@ async def ws_test(websocket: WebSocket):
                                         )
                                         audio = speech.RecognitionAudio(content=segment_bytes)
                                         return global_speech_client.recognize(config=cfg, audio=audio)
-                                    resp = await loop.run_in_executor(None, do_recognize_webm)
+                                    # Prefer matching the saved container first
+                                    if seg_ext == "ogg":
+                                        resp = await loop.run_in_executor(None, do_recognize_ogg)
+                                    else:
+                                        resp = await loop.run_in_executor(None, do_recognize_webm)
                                     transcript_text = ""
                                     if resp.results and resp.results[0].alternatives:
                                         transcript_text = resp.results[0].alternatives[0].transcript or ""
@@ -415,23 +423,29 @@ async def ws_test(websocket: WebSocket):
                                     loop = asyncio.get_running_loop()
                                     def do_vertex():
                                         try:
-                                            # Try WEBM first; if not supported, fall back to OGG
-                                            try:
-                                                return global_vertex_client.models.generate_content(
-                                                    model=VERTEX_GEMINI_MODEL,
-                                                    contents=[
-                                                        {"mime_type": "audio/webm", "data": segment_bytes},
-                                                        "Transcribe the spoken audio to plain text. Return only the transcript."
-                                                    ]
-                                                )
-                                            except Exception:
-                                                return global_vertex_client.models.generate_content(
-                                                    model=VERTEX_GEMINI_MODEL,
-                                                    contents=[
-                                                        {"mime_type": "audio/ogg", "data": segment_bytes},
-                                                        "Transcribe the spoken audio to plain text. Return only the transcript."
-                                                    ]
-                                                )
+                                            # Prefer the declared mime; then fallback to the other container
+                                            order = [client_mime] if client_mime else []
+                                            if seg_ext == "ogg":
+                                                order += ["audio/ogg", "audio/webm"]
+                                            else:
+                                                order += ["audio/webm", "audio/ogg"]
+                                            last_exc = None
+                                            for mt in order:
+                                                if not mt:
+                                                    continue
+                                                try:
+                                                    return global_vertex_client.models.generate_content(
+                                                        model=VERTEX_GEMINI_MODEL,
+                                                        contents=[
+                                                            {"mime_type": mt, "data": segment_bytes},
+                                                            "Transcribe the spoken audio to plain text. Return only the transcript."
+                                                        ]
+                                                    )
+                                                except Exception as ie:
+                                                    last_exc = ie
+                                                    continue
+                                            if last_exc:
+                                                raise last_exc
                                         except Exception as e:
                                             raise e
                                     resp = await loop.run_in_executor(None, do_vertex)
@@ -460,10 +474,26 @@ async def ws_test(websocket: WebSocket):
                                     loop = asyncio.get_running_loop()
                                     def do_gemini():
                                         try:
-                                            return global_gemini_model.generate_content([
-                                                {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
-                                                {"mime_type": "audio/webm", "data": segment_bytes}
-                                            ])
+                                            # Prefer declared mime first
+                                            order = [client_mime] if client_mime else []
+                                            if seg_ext == "ogg":
+                                                order += ["audio/ogg", "audio/webm"]
+                                            else:
+                                                order += ["audio/webm", "audio/ogg"]
+                                            last_exc = None
+                                            for mt in order:
+                                                if not mt:
+                                                    continue
+                                                try:
+                                                    return global_gemini_model.generate_content([
+                                                        {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
+                                                        {"mime_type": mt, "data": segment_bytes}
+                                                    ])
+                                                except Exception as ie:
+                                                    last_exc = ie
+                                                    continue
+                                            if last_exc:
+                                                raise last_exc
                                         except Exception as e:
                                             raise e
                                     resp = await loop.run_in_executor(None, do_gemini)
