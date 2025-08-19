@@ -134,3 +134,24 @@ Initially, this project encountered a `CERTIFICATE_VERIFY_FAILED: unable to get 
 *   **System Trust Store Issues:** Problems with the operating system's root certificate store.
 
 While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` environment variable, these did not resolve the issue. The decision was made to shift to a web-based application using `python-fasthtml` and Docker for deployment. In deployed environments (especially cloud platforms), SSL certificate handling is typically managed by load balancers or the platform itself, often circumventing these local certificate issues.
+
+### Vertex AI Gemini with Service Accounts (Optional, Parallel Transcription)
+
+To run Gemini using your service account (no API key), enable the Vertex AI SDK mode:
+
+1. Ensure `google-cloud-aiplatform` is installed (already in `requirements.txt`).
+2. Set environment variables:
+   - Windows (PowerShell):
+     ```powershell
+     $env:GOOGLE_CLOUD_PROJECT="your_gcp_project_id"
+     $env:GOOGLE_CLOUD_LOCATION="us-central1"
+     $env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\service_account_key.json"
+     ```
+   - Linux/macOS:
+     ```bash
+     export GOOGLE_CLOUD_PROJECT="your_gcp_project_id"
+     export GOOGLE_CLOUD_LOCATION="us-central1"
+     export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service_account_key.json"
+     ```
+
+With these set, the backend will prefer Vertex AI Gemini for per-segment transcription and fall back to Google consumer `google-generativeai` only if `GEMINI_API_KEY` is set and Vertex isn’t configured.
