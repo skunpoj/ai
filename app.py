@@ -214,8 +214,8 @@ async def ws_test(websocket: WebSocket):
                         await websocket.send_json({"type": "ack", "what": "transcribe", "enabled": transcribe_enabled})
                     except Exception:
                         pass
-                    # Also send auth status when enabling
                     if transcribe_enabled:
+                        # Send auth status and UI hint; per-segment recognition will run for each segment
                         status = {
                             "type": "auth",
                             "ready": bool(global_speech_client and global_streaming_config),
@@ -223,19 +223,14 @@ async def ws_test(websocket: WebSocket):
                         }
                         try:
                             await websocket.send_json(status)
-                        except Exception:
-                            pass
-                        # Inform UI we're listening
-                        try:
                             await websocket.send_json({"type": "status", "message": "Transcribing... awaiting results"})
                         except Exception:
                             pass
-                        stream_started = True
-                        # Start streaming task if not already running and client ready
-                        if stream_task is None and global_speech_client and global_streaming_config:
-                            stream_task = asyncio.create_task(stream_to_google_and_send_to_frontend())
+                        # Explicitly keep streaming disabled (we rely on per-segment recognize with WEBM_OPUS)
+                        stream_started = False
+                        stream_task = None
                     else:
-                        # Stop streaming by sending sentinel
+                        # Ensure any prior streaming attempts are stopped (safety)
                         try:
                             requests_q.put(None)
                         except Exception:
@@ -342,19 +337,7 @@ async def ws_test(websocket: WebSocket):
                         except Exception as e:
                             print(f"Backend: Failed to notify chunk_saved: {e}")
                         # Per-chunk recognition disabled to avoid noise; we rely on per-segment recognition.
-                        # Auto-start streaming recognizer if client is sending google_speech-enabled chunks
-                        if enable_google_speech and not stream_started and (global_speech_client and global_streaming_config):
-                            stream_started = True
-                            print("Backend: Auto-starting streaming recognizer due to enable flag on chunk.")
-                            if stream_task is None:
-                                stream_task = asyncio.create_task(stream_to_google_and_send_to_frontend())
-                        # Also forward bytes to streaming recognizer if active
-                        if enable_google_speech and stream_started:
-                            try:
-                                requests_q.put(decoded_chunk)
-                                print(f"Backend: queued {len(decoded_chunk)} bytes to streaming recognizer.")
-                            except Exception:
-                                pass
+                        # Streaming recognizer disabled; rely on per-segment recognition only
                         chunk_index += 1
                     except Exception as e:
                         print(f"Backend: Error decoding/writing audio chunk: {e}")
