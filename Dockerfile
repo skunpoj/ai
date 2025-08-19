@@ -6,6 +6,12 @@ WORKDIR /app
 
 # Copy your requirements file and install dependencies
 COPY requirements.txt .
+# Install CA certificates to fix TLS verification for Google APIs
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your application code
@@ -19,4 +25,8 @@ RUN mkdir -p /app/gcp-credentials
 
 # Command to run your application
 # The GOOGLE_APPLICATION_CREDENTIALS environment variable will be set when you run the container
+# Ensure OpenSSL finds the system certs
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
 CMD ["python", "app.py"]

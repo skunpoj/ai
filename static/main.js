@@ -183,8 +183,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     const entry = document.createElement('div');
                     entry.id = `chunk-${idx}`;
-                    entry.innerHTML = `Chunk ${idx + 1} <span id="chunk-tx-${idx}"></span>`;
-                    entry.style.display = 'inline-block';
+                    const when = (typeof data.ts === 'number') ? new Date(data.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
+                    entry.innerHTML = `${when} <span id="chunk-tx-${idx}"></span>`;
+                    entry.style.display = 'block';
                     chunkList.appendChild(entry);
                 } else if (data.type === 'chunk_transcript') {
                     const el = document.getElementById(`chunk-tx-${data.idx}`);
@@ -309,8 +310,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     try {
                         const arrayBuffer = await event.data.arrayBuffer();
                         const b64 = arrayBufferToBase64(arrayBuffer);
-                        // Always send enable_google_speech: false; we do per-segment recognition only
-                        socket.send(JSON.stringify({ audio: b64, enable_google_speech: false }));
+                        // Attach a client timestamp for display and ordering
+                        socket.send(JSON.stringify({ audio: b64, enable_google_speech: enableGoogleSpeech, client_ts: Date.now() }));
                     } catch (e) {
                         console.error('Frontend: Failed to convert/send chunk:', e);
                     }

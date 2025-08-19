@@ -362,7 +362,12 @@ async def ws_test(websocket: WebSocket):
                             cf.write(decoded_chunk)
                         chunk_url = f"/static/recordings/session_{session_ts}/chunk_{chunk_index}.webm"
                         try:
-                            await websocket.send_json({"type": "chunk_saved", "idx": chunk_index, "url": chunk_url})
+                            await websocket.send_json({
+                                "type": "chunk_saved",
+                                "idx": chunk_index,
+                                "url": chunk_url,
+                                "ts": message.get("client_ts")
+                            })
                             print(f"Backend: Notified client chunk_saved idx={chunk_index}")
                         except Exception as e:
                             print(f"Backend: Failed to notify chunk_saved: {e}")
