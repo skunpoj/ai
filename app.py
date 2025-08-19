@@ -71,7 +71,6 @@ if True:
             # Match browser MediaRecorder default (often WebM Opus at ~48000 Hz)
             global_recognition_config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-                sample_rate_hertz=48000,
                 language_code="en-US",
             )
             global_streaming_config = speech.StreamingRecognitionConfig(
@@ -281,8 +280,14 @@ async def ws_test(websocket: WebSocket):
                         with open(seg_path, "wb") as sf:
                             sf.write(decoded_seg)
                         seg_url = f"/static/recordings/session_{session_ts}/segment_{segment_index}.webm"
+                        client_id = message.get("id")
                         try:
-                            await websocket.send_json({"type": "segment_saved", "idx": segment_index, "url": seg_url})
+                            await websocket.send_json({
+                                "type": "segment_saved",
+                                "idx": segment_index,
+                                "url": seg_url,
+                                "id": client_id
+                            })
                         except Exception:
                             pass
                         # Optionally recognize this segment when transcribe is enabled and client ready
@@ -293,7 +298,6 @@ async def ws_test(websocket: WebSocket):
                                     def do_recognize():
                                         cfg = speech.RecognitionConfig(
                                             encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-                                            sample_rate_hertz=48000,
                                             language_code="en-US",
                                         )
                                         audio = speech.RecognitionAudio(content=segment_bytes)
@@ -303,7 +307,12 @@ async def ws_test(websocket: WebSocket):
                                     if resp.results and resp.results[0].alternatives:
                                         transcript_text = resp.results[0].alternatives[0].transcript or ""
                                     try:
-                                        await websocket.send_json({"type": "segment_transcript", "idx": idx, "transcript": transcript_text})
+                                        await websocket.send_json({
+                                            "type": "segment_transcript",
+                                            "idx": idx,
+                                            "transcript": transcript_text,
+                                            "id": client_id
+                                        })
                                     except Exception:
                                         pass
                                 except Exception as e:
@@ -332,35 +341,7 @@ async def ws_test(websocket: WebSocket):
                             print(f"Backend: Notified client chunk_saved idx={chunk_index}")
                         except Exception as e:
                             print(f"Backend: Failed to notify chunk_saved: {e}")
-                        # Launch per-chunk transcription if enabled and client ready
-                        this_idx = chunk_index
-                        if enable_google_speech and (global_speech_client and global_streaming_config):
-                            try:
-                                # Run short recognize on this chunk in background to get per-chunk transcript
-                                loop = asyncio.get_running_loop()
-                                async def transcribe_chunk(chunk_bytes: bytes, idx: int):
-                                    try:
-                                        def do_recognize():
-                                            cfg = speech.RecognitionConfig(
-                                                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-                                                sample_rate_hertz=48000,
-                                                language_code="en-US",
-                                            )
-                                            audio = speech.RecognitionAudio(content=chunk_bytes)
-                                            return global_speech_client.recognize(config=cfg, audio=audio)
-                                        resp = await loop.run_in_executor(None, do_recognize)
-                                        transcript_text = ""
-                                        if resp.results and resp.results[0].alternatives:
-                                            transcript_text = resp.results[0].alternatives[0].transcript or ""
-                                        try:
-                                            await websocket.send_json({"type": "chunk_transcript", "idx": idx, "transcript": transcript_text})
-                                        except Exception:
-                                            pass
-                                    except Exception as e:
-                                        print(f"Backend: per-chunk recognize error: {e}")
-                                asyncio.create_task(transcribe_chunk(decoded_chunk, this_idx))
-                            except Exception as e:
-                                print(f"Backend: Failed to schedule per-chunk transcription: {e}")
+                        # Per-chunk recognition disabled to avoid noise; we rely on per-segment recognition.
                         # Auto-start streaming recognizer if client is sending google_speech-enabled chunks
                         if enable_google_speech and not stream_started and (global_speech_client and global_streaming_config):
                             stream_started = True
