@@ -175,7 +175,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     const entry = document.createElement('div');
                     entry.id = `chunk-${idx}`;
-                    entry.innerHTML = `Chunk ${idx + 1}: <audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a> <span id="chunk-tx-${idx}"></span>`;
+                    entry.innerHTML = `Chunk ${idx + 1} <span id="chunk-tx-${idx}"></span>`;
                     chunkList.appendChild(entry);
                 } else if (data.type === 'chunk_transcript') {
                     const el = document.getElementById(`chunk-tx-${data.idx}`);
@@ -252,7 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 segmentBuffer.push(event.data);
                 if (now - segmentStartTs >= segmentMs) {
                     try {
-                        const segBlob = new Blob(segmentBuffer, { type: 'audio/webm' });
+                        const segBlob = new Blob(segmentBuffer, { type: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'audio/webm;codecs=opus' });
                         const segUrl = URL.createObjectURL(segBlob);
                         let segList = document.getElementById('chunkList');
                         if (!segList) {
@@ -263,7 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const idx = segList.childElementCount;
                         const entry = document.createElement('div');
                         entry.id = `segment-${idx}`;
-                        entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio>`;
+                        entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio> <a href="${segUrl}" download="segment_${idx + 1}.webm">Download</a>`;
                         segList.appendChild(entry);
                     } catch (e) { console.warn('Frontend: failed to create segment blob', e); }
                     segmentBuffer = [];
@@ -288,7 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Flush remaining segment buffer as a playable segment
                 if (segmentBuffer.length) {
                     try {
-                        const segBlob = new Blob(segmentBuffer, { type: 'audio/webm' });
+                        const segBlob = new Blob(segmentBuffer, { type: (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'audio/webm;codecs=opus' });
                         const segUrl = URL.createObjectURL(segBlob);
                         let segList = document.getElementById('chunkList');
                         if (!segList) {
@@ -299,7 +299,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const idx = segList.childElementCount;
                         const entry = document.createElement('div');
                         entry.id = `segment-${idx}`;
-                        entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio>`;
+                        entry.innerHTML = `Segment ${idx + 1}: <audio controls src="${segUrl}"></audio> <a href="${segUrl}" download="segment_${idx + 1}.webm">Download</a>`;
                         segList.appendChild(entry);
                     } catch (e) { console.warn('Frontend: failed to flush segment', e); }
                     segmentBuffer = [];
