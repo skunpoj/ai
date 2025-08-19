@@ -134,19 +134,7 @@ def index():
 async def ws_test(websocket: WebSocket):
     print("Backend: ENTERED /ws_test function (audio streaming HTMX).") # CRITICAL TEST LOG
 
-    # Send ready signal to frontend - Frontend will start MediaRecorder on this
-    try:
-        await websocket.send_json({"type": "ready"})
-        print("Backend: Sent 'ready' signal.")
-        # Also send a plain text fallback for clients not parsing JSON early
-        try:
-            await websocket.send_text("ready")
-        except Exception:
-            pass
-    except Exception as e:
-        # Client may have disconnected before we could send
-        print(f"Backend: Failed to send 'ready' (client likely disconnected): {e}")
-        return
+    # Do not send 'ready' here; wait for explicit client 'hello' to avoid double-starts
 
     # Queues to buffer audio chunks for Google Speech API
     # Use a standard Queue for the Google streaming call (which is synchronous)
@@ -189,7 +177,7 @@ async def ws_test(websocket: WebSocket):
                 
                 # Respond with 'ready' on explicit hello to ensure recorder starts
                 if message.get("type") == "hello":
-                    print("Backend: Received hello from client. Re-sending 'ready'.")
+                    print("Backend: Received hello from client. Sending 'ready'.")
                     await websocket.send_json({"type": "ready"})
                     continue
 
