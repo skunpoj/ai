@@ -290,34 +290,22 @@ document.addEventListener('DOMContentLoaded', () => {
                             segList.id = 'segmentList';
                             (segmentContainer || recordingsContainer).appendChild(segList);
                         }
-                        const idx = segList.childElementCount;
+                        const ts = Date.now();
                         const entry = document.createElement('div');
-                        entry.id = `segment-${idx}`;
-                        entry.textContent = `Segment ${idx + 1} (uploading...)`;
+                        entry.id = `segment-${ts}`;
+                        entry.textContent = `${new Date(ts).toLocaleTimeString()} — uploading...`;
                         segList.appendChild(entry);
                         // Also upload the segment to server so it is playable from server
                         if (socket.readyState === WebSocket.OPEN) {
                             const arrayBuffer = await segBlob.arrayBuffer();
                             const b64seg = arrayBufferToBase64(arrayBuffer);
-                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: idx }));
+                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts }));
                         }
                     } catch (e) { console.warn('Frontend: failed to create/send segment blob', e); }
                     segmentBuffer = [];
                     segmentStartTs = now;
                 }
-                if (socket.readyState === WebSocket.OPEN) {
-                    console.log('Frontend: Sending audio data. WebSocket readyState:', socket.readyState, 'Chunk size:', event.data.size);
-                    try {
-                        const arrayBuffer = await event.data.arrayBuffer();
-                        const b64 = arrayBufferToBase64(arrayBuffer);
-                        // Attach a client timestamp for display and ordering
-                        socket.send(JSON.stringify({ audio: b64, enable_google_speech: enableGoogleSpeech, client_ts: Date.now() }));
-                    } catch (e) {
-                        console.error('Frontend: Failed to convert/send chunk:', e);
-                    }
-                } else {
-                    console.warn('Frontend: WebSocket not open. readyState:', socket.readyState, 'Not sending data.');
-                }
+                // Do not send per-chunk audio anymore; we only stream PCM and post full segments
             };
 
             mediaRecorder.onstop = async () => {
@@ -332,16 +320,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             segList.id = 'segmentList';
                             recordingsContainer.parentNode.insertBefore(segList, recordingsContainer);
                         }
-                        const idx = segList.childElementCount;
+                        const ts = Date.now();
                         const entry = document.createElement('div');
-                        entry.id = `segment-${idx}`;
-                        entry.textContent = `Segment ${idx + 1} (uploading...)`;
+                        entry.id = `segment-${ts}`;
+                        entry.textContent = `${new Date(ts).toLocaleTimeString()} — uploading...`;
                         segList.appendChild(entry);
                         // Upload final segment to server
                         if (socket.readyState === WebSocket.OPEN) {
                             const arrayBuffer = await segBlob.arrayBuffer();
                             const b64seg = arrayBufferToBase64(arrayBuffer);
-                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: idx }));
+                            socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts }));
                         }
                     } catch (e) { console.warn('Frontend: failed to flush segment', e); }
                     segmentBuffer = [];

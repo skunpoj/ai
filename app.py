@@ -291,12 +291,15 @@ async def ws_test(websocket: WebSocket):
                             sf.write(decoded_seg)
                         seg_url = f"/static/recordings/session_{session_ts}/segment_{segment_index}.webm"
                         client_id = message.get("id")
+                        client_ts = message.get("ts") or get_current_time()
                         try:
                             await websocket.send_json({
                                 "type": "segment_saved",
                                 "idx": segment_index,
                                 "url": seg_url,
-                                "id": client_id
+                                "id": client_id,
+                                "ts": client_ts,
+                                "status": "ws_ok"
                             })
                         except Exception:
                             pass
@@ -336,7 +339,8 @@ async def ws_test(websocket: WebSocket):
                                             "type": "segment_transcript",
                                             "idx": idx,
                                             "transcript": transcript_text,
-                                            "id": client_id
+                                            "id": client_id,
+                                            "ts": client_ts
                                         })
                                     except Exception:
                                         pass
