@@ -66,7 +66,7 @@ if True:
             
             global_speech_client = speech.SpeechClient()
             global_recognition_config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+                encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
                 sample_rate_hertz=SAMPLE_RATE,
                 language_code="en-US",
             )
@@ -148,15 +148,22 @@ async def ws_test(websocket: WebSocket):
     # Prepare server-side recording file under static so it can be fetched later
     recordings_dir = os.path.join("static", "recordings")
     os.makedirs(recordings_dir, exist_ok=True)
-    server_filename = f"recording_{get_current_time()}.webm"
+    session_ts = get_current_time()
+    server_filename = f"recording_{session_ts}.ogg"
     server_filepath = os.path.join(recordings_dir, server_filename)
     server_file = open(server_filepath, "ab")
+
+    # Directory for per-chunk files
+    session_chunks_dir = os.path.join(recordings_dir, f"session_{session_ts}")
+    os.makedirs(session_chunks_dir, exist_ok=True)
+    chunk_index = 0
 
     # Task to continuously receive messages from frontend
     async def receive_from_frontend():
         try:
             transcribe_enabled = False
             stream_started = False
+            stream_task = None
             while True:
                 try:
                     message = await websocket.receive_json() # Frontend sends JSON
@@ -205,7 +212,15 @@ async def ws_test(websocket: WebSocket):
                             await websocket.send_json(status)
                         except Exception:
                             pass
+                        # Inform UI we're listening
+                        try:
+                            await websocket.send_json({"type": "status", "message": "Transcribing... awaiting results"})
+                        except Exception:
+                            pass
                         stream_started = True
+                        # Start streaming task if not already running and client ready
+                        if stream_task is None and global_speech_client and global_streaming_config:
+                            stream_task = asyncio.create_task(stream_to_google_and_send_to_frontend())
                     else:
                         # Stop streaming by sending sentinel
                         try:
@@ -213,6 +228,7 @@ async def ws_test(websocket: WebSocket):
                         except Exception:
                             pass
                         stream_started = False
+                        stream_task = None
                     continue
 
                 if "end_stream" in message and message["end_stream"]:
@@ -237,12 +253,22 @@ async def ws_test(websocket: WebSocket):
                 enable_google_speech = transcribe_enabled or message.get("enable_google_speech", False)
                 audio_data_b64 = message.get("audio")
 
-                # Persist audio chunks to server file; forward to Google if enabled
+                # Persist audio chunks to server file; forward to Google if enabled, also save per-chunk file
                 if audio_data_b64:
                     try:
                         decoded_chunk = base64.b64decode(audio_data_b64)
                         server_file.write(decoded_chunk)
                         server_file.flush()
+                        # Save per-chunk file
+                        chunk_path = os.path.join(session_chunks_dir, f"chunk_{chunk_index}.ogg")
+                        with open(chunk_path, "ab") as cf:
+                            cf.write(decoded_chunk)
+                        chunk_url = f"/static/recordings/session_{session_ts}/chunk_{chunk_index}.ogg"
+                        try:
+                            await websocket.send_json({"type": "chunk_saved", "idx": chunk_index, "url": chunk_url})
+                        except Exception as e:
+                            print(f"Backend: Failed to notify chunk_saved: {e}")
+                        chunk_index += 1
                         if enable_google_speech and stream_started:
                             await audio_queue.put(decoded_chunk)
                     except Exception as e:

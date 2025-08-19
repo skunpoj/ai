@@ -43,6 +43,17 @@ document.addEventListener('DOMContentLoaded', () => {
         parentNode.insertBefore(authStatus, recordingsContainer || beforeNode);
     }
 
+    // Log redacted Google auth info on load (from server-injected globals)
+    const initialAuthReady = typeof window.GOOGLE_AUTH_READY !== 'undefined' ? window.GOOGLE_AUTH_READY : false;
+    const initialAuthInfo = (typeof window.GOOGLE_AUTH_INFO !== 'undefined' && window.GOOGLE_AUTH_INFO) ? window.GOOGLE_AUTH_INFO : {};
+    console.log('Frontend: Google auth on load:', { ready: initialAuthReady, info: initialAuthInfo });
+    if (authStatus) {
+        const project = initialAuthInfo.project_id || '';
+        const email = initialAuthInfo.client_email_masked || '';
+        const key = initialAuthInfo.private_key_id_masked || '';
+        authStatus.innerText = initialAuthReady ? `Google auth OK (project=${project}, email=${email}, key=${key})` : 'Google auth NOT READY';
+    }
+
     // This ensures CHUNK_SIZE is available from the backend-rendered script tag
     // Example: <script>let CHUNK_SIZE = 1600;</script>
     // No explicit declaration here as it's provided by app.py
@@ -50,6 +61,8 @@ document.addEventListener('DOMContentLoaded', () => {
     startRecordingButton.addEventListener('click', async () => {
         startRecordingButton.disabled = true;
         stopRecordingButton.disabled = false;
+        startTranscribeButton.disabled = false; // allow transcribe only during recording
+        stopTranscribeButton.disabled = true;
         transcriptionElement.innerText = "Transcription: ";
         recordingsContainer.innerHTML = ''; // Clear previous recordings on new start
 
@@ -60,7 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm; codecs=opus' });
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/ogg; codecs=opus' });
             audioChunks = [];
             
             // WebSocket connection is managed by HTMX on the hx-ext="ws" element.
@@ -126,6 +139,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     console.log('Frontend: Received transcription:', data.transcript);
                     transcriptionElement.innerText = `Transcription: ${data.transcript}`;
                     if (currentRecording) currentRecording.transcription = data.transcript;
+                    // If there is a per-chunk entry, append transcript to it
+                    const chunkList = document.getElementById('chunkList');
+                    if (chunkList) {
+                        const lastChunk = chunkList.querySelector('div:last-child span[id^="chunk-tx-"]');
+                        if (lastChunk) lastChunk.textContent = ` — ${data.transcript}`;
+                    }
+                } else if (data.type === 'chunk_saved') {
+                    console.log('Frontend: Server saved chunk:', data);
+                    const idx = data.idx;
+                    let chunkList = document.getElementById('chunkList');
+                    if (!chunkList) {
+                        chunkList = document.createElement('div');
+                        chunkList.id = 'chunkList';
+                        recordingsContainer.parentNode.insertBefore(chunkList, recordingsContainer);
+                    }
+                    const entry = document.createElement('div');
+                    entry.id = `chunk-${idx}`;
+                    entry.innerHTML = `<a href="${data.url}" download>Download chunk ${idx + 1}</a> <span id="chunk-tx-${idx}"></span>`;
+                    chunkList.appendChild(entry);
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
                     const savedUrl = data.url;
@@ -145,6 +177,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     } catch (_) {}
                 } else if (data.type === 'pong') {
                     connStatus.innerText = `WebSocket: pong (${data.ts})`;
+                } else if (data.type === 'status') {
+                    // Show server-side status messages (e.g., "Transcribing...")
+                    transcriptionElement.innerText = `Transcription: ${data.message}`;
                 } else if (data.type === 'auth') {
                     const ready = !!data.ready;
                     const info = data.info || {};
@@ -227,6 +262,8 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log("Frontend: Stop Recording button clicked.");
         startRecordingButton.disabled = false;
         stopRecordingButton.disabled = true;
+        startTranscribeButton.disabled = true; // disable transcribe controls when not recording
+        stopTranscribeButton.disabled = true;
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             mediaRecorder.stop();
         }
