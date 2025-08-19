@@ -133,7 +133,9 @@ else:
 vertex_project = os.environ.get("GOOGLE_CLOUD_PROJECT")
 if not vertex_project and global_auth_info and global_auth_info.get("project_id"):
     vertex_project = global_auth_info.get("project_id")
-vertex_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+# vertex_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+vertex_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "bot.or.th")
+
 if genai_sdk is not None and vertex_project:
     try:
         global_vertex_client = genai_sdk.Client(vertexai=True, project=vertex_project, location=vertex_location)
