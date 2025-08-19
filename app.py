@@ -68,7 +68,7 @@ global_streaming_config = None
 global_auth_info = None
 global_gemini_model = None
 global_vertex_client = None
-VERTEX_GEMINI_MODEL = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash")
+VERTEX_GEMINI_MODEL = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-1.5-flash")
 
 # Initialize Google client if credentials are present; otherwise stay None and we will notify on demand
 if True:
@@ -133,8 +133,8 @@ else:
 vertex_project = os.environ.get("GOOGLE_CLOUD_PROJECT")
 if not vertex_project and global_auth_info and global_auth_info.get("project_id"):
     vertex_project = global_auth_info.get("project_id")
-# vertex_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-vertex_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "bot.or.th")
+vertex_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+# vertex_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "bot.or.th")
 
 if genai_sdk is not None and vertex_project:
     try:
@@ -169,6 +169,7 @@ def index():
             ),
             # Status + outputs
             P("Transcription: ", id="transcription"),
+            Div(id="liveTranscriptContainer"),
             Div(
                 Label("Segment length:", _for="segmentLenGroup"),
                 Div(
@@ -372,6 +373,7 @@ async def ws_test(websocket: WebSocket):
                                         cfg = speech.RecognitionConfig(
                                             encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
                                             language_code="en-US",
+                                            sample_rate_hertz=48000,
                                         )
                                         audio = speech.RecognitionAudio(content=segment_bytes)
                                         return global_speech_client.recognize(config=cfg, audio=audio)
@@ -379,6 +381,7 @@ async def ws_test(websocket: WebSocket):
                                         cfg = speech.RecognitionConfig(
                                             encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
                                             language_code="en-US",
+                                            sample_rate_hertz=48000,
                                         )
                                         audio = speech.RecognitionAudio(content=segment_bytes)
                                         return global_speech_client.recognize(config=cfg, audio=audio)

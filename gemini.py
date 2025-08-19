@@ -23,7 +23,7 @@ else:
 # --- Credentials Handling (END) ---
 
 client = genai.Client(
-  vertexai=True, project="da-proof-of-concept", location="bot.or.th",
+  vertexai=True, project="da-proof-of-concept", location="global",
 )
 # If your image is stored in Google Cloud Storage, you can use the from_uri class method to create a Part object.
 IMAGE_URI = "gs://generativeai-downloads/images/scones.jpg"

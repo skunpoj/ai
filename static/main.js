@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const startTranscribeButton = document.getElementById('startTranscribe');
     const stopTranscribeButton = document.getElementById('stopTranscribe');
     const transcriptionElement = document.getElementById('transcription');
+    const liveTranscriptContainer = document.getElementById('liveTranscriptContainer');
     const recordingsContainer = document.getElementById('recordingsContainer');
     const fullContainer = document.getElementById('fullContainer') || recordingsContainer;
     const segmentContainer = document.getElementById('segmentContainer') || recordingsContainer;
@@ -174,11 +175,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     // Initialize current recording object for this session
                     currentRecording = { audioUrl: null, transcription: '' };
-                } else if (data.transcript) {
-                    console.log('Frontend: Received transcription:', data.transcript);
-                    transcriptionElement.innerText = `Transcription: ${data.transcript}`;
-                    if (currentRecording) currentRecording.transcription = data.transcript;
-                    // Do not attach transcripts to chunk rows; we show them per-segment
+                } else if (data.transcript && typeof data.is_final !== 'undefined') {
+                    // Live Google streaming transcript (append-only)
+                    const line = document.createElement('div');
+                    const prefix = data.is_final ? '[Google Live Final]' : '[Google Live]';
+                    line.textContent = `${prefix} ${data.transcript}`;
+                    if (liveTranscriptContainer) liveTranscriptContainer.appendChild(line);
+                    if (currentRecording && data.is_final) currentRecording.transcription = (currentRecording.transcription || '') + ' ' + data.transcript;
                 } else if (data.type === 'chunk_saved' || data.type === 'chunk_transcript') {
                     // Ignore chunk UI updates; chunks are internal
                 } else if (data.type === 'segment_saved') {
@@ -193,7 +196,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     const existing = document.getElementById(`segment-${idx}`);
                     const when = (typeof data.ts === 'number') ? new Date(data.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
                     const mime = (typeof data.mime === 'string' && data.mime) ? data.mime : (String(data.url).endsWith('.ogg') ? 'audio/ogg' : 'audio/webm');
-                    const html = `Segment ${idx + 1} — ${when}: <audio controls id="segment-audio-${idx}"><source src="${data.url}" type="${mime}"></audio> <a href="${data.url}" download>Download</a> <span id="segment-tx-${idx}" class="tx-google"></span> <span id="segment-tx-vertex-${idx}" class="tx-vertex"></span> <span id="segment-tx-gem-${idx}" class="tx-gemini"></span>`;
+                    const html = `Segment ${idx + 1} — ${when}: <audio controls id="segment-audio-${idx}"><source src="${data.url}" type="${mime}"></audio> <a href="${data.url}" download>Download</a>
+                    <div id="segment-tx-list-${idx}" class="tx-list"></div>`;
                     if (existing) existing.innerHTML = html; else {
                         const segDiv = document.createElement('div');
                         segDiv.id = `segment-${idx}`;
@@ -202,23 +206,37 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     const audioEl = document.getElementById(`segment-audio-${idx}`);
                     try { if (audioEl) audioEl.load(); } catch(_) {}
-                    // Always show a simple status to confirm segment receipt
-                    const txEl = document.getElementById(`segment-tx-${idx}`);
-                    if (txEl && (!txEl.textContent || txEl.textContent.trim() === '')) {
-                        txEl.textContent = ' — uploaded';
+                    // Show a status row
+                    const list = document.getElementById(`segment-tx-list-${idx}`);
+                    if (list) {
+                        const row = document.createElement('div');
+                        row.textContent = '[Status] uploaded';
+                        list.appendChild(row);
                     }
                 } else if (data.type === 'segment_transcript' || data.type === 'segment_transcript_google') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
-                    const el = document.getElementById(`segment-tx-${idx}`);
-                    if (el) el.textContent = data.transcript ? ` — ${data.transcript}` : ' — (no Google text)';
+                    const list = document.getElementById(`segment-tx-list-${idx}`);
+                    if (list) {
+                        const row = document.createElement('div');
+                        row.textContent = data.transcript ? `[Google] ${data.transcript}` : '[Google] (no text)';
+                        list.appendChild(row);
+                    }
                 } else if (data.type === 'segment_transcript_vertex') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
-                    const el = document.getElementById(`segment-tx-vertex-${idx}`);
-                    if (el) el.textContent = data.transcript ? ` — [Vertex] ${data.transcript}` : '';
+                    const list = document.getElementById(`segment-tx-list-${idx}`);
+                    if (list) {
+                        const row = document.createElement('div');
+                        row.textContent = data.transcript ? `[Vertex] ${data.transcript}` : '[Vertex] (no text)';
+                        list.appendChild(row);
+                    }
                 } else if (data.type === 'segment_transcript_gemini') {
                     const idx = typeof data.id === 'number' ? data.id : data.idx;
-                    const el = document.getElementById(`segment-tx-gem-${idx}`);
-                    if (el) el.textContent = data.transcript ? ` — [Gemini] ${data.transcript}` : '';
+                    const list = document.getElementById(`segment-tx-list-${idx}`);
+                    if (list) {
+                        const row = document.createElement('div');
+                        row.textContent = data.transcript ? `[Gemini] ${data.transcript}` : '[Gemini] (no text)';
+                        list.appendChild(row);
+                    }
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
                     const savedUrl = data.url;
