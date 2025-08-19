@@ -151,9 +151,10 @@ else:
 
 @rt("/") # Main application route
 def index():
-    return Title("Speech-to-Text with FastHTML"),\
+    title = "Live Transcription & Translation"
+    return Title(title),\
         Link(rel="icon", href="/static/favicon.ico"),\
-        H1("Speech-to-Text"),\
+        H1(title),\
         Div( # Start Div arguments
             # Row 1: recording + connection health
             Div(
