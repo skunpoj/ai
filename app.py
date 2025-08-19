@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 from fasthtml.common import *
 from starlette.websockets import WebSocket, WebSocketDisconnect # Explicitly import WebSocket classes from starlette
 
@@ -12,6 +13,9 @@ from google.cloud import speech
 
 # Transcription is now controlled at runtime via Start/Stop Transcribe
 ENABLE_GOOGLE_SPEECH = True
+
+# Load .env before reading any credential env vars
+load_dotenv()
 
 # --- Credentials Handling (START) ---
 credentials_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
@@ -99,11 +103,20 @@ def index():
         Div( # Start Div arguments
             Button("Start Recording", id="startRecording"),
             Button("Stop Recording", id="stopRecording", disabled=True),
-            Button("Start Transcribe", id="startTranscribe", disabled=True),
-            Button("Stop Transcribe", id="stopTranscribe", disabled=True),
+            Br(),
+            Div(
+                Button("Start Transcribe", id="startTranscribe", disabled=True),
+                Button("Stop Transcribe", id="stopTranscribe", disabled=True),
+            ),
             P("Transcription: ", id="transcription"),
             Div(id="recordingsContainer"),
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
+            # Log redacted Google auth info on page load
+            Script(
+                f"window.GOOGLE_AUTH_INFO = {json.dumps(global_auth_info or {})};\n"
+                f"window.GOOGLE_AUTH_READY = {( 'true' if (global_speech_client and global_streaming_config) else 'false' )};\n"
+                "console.log('Frontend: Google auth on load:', { ready: window.GOOGLE_AUTH_READY, info: window.GOOGLE_AUTH_INFO });"
+            ),
             Script(src="/static/main.js"),
             hx_ext="ws" # Apply HTMX WebSocket extension to the Div
         ) # End Div arguments
@@ -135,8 +148,8 @@ async def ws_test(websocket: WebSocket):
     # Task to continuously receive messages from frontend
     async def receive_from_frontend():
         try:
-            sent_disabled_notice = False
             transcribe_enabled = False
+            stream_started = False
             while True:
                 try:
                     message = await websocket.receive_json() # Frontend sends JSON
@@ -185,6 +198,14 @@ async def ws_test(websocket: WebSocket):
                             await websocket.send_json(status)
                         except Exception:
                             pass
+                        stream_started = True
+                    else:
+                        # Stop streaming by sending sentinel
+                        try:
+                            await audio_queue.put(None)
+                        except Exception:
+                            pass
+                        stream_started = False
                     continue
 
                 if "end_stream" in message and message["end_stream"]:
@@ -215,23 +236,10 @@ async def ws_test(websocket: WebSocket):
                         decoded_chunk = base64.b64decode(audio_data_b64)
                         server_file.write(decoded_chunk)
                         server_file.flush()
-                        if enable_google_speech:
+                        if enable_google_speech and stream_started:
                             await audio_queue.put(decoded_chunk)
                     except Exception as e:
                         print(f"Backend: Error decoding/writing audio chunk: {e}")
-
-                    # When Google is disabled, send placeholder only once per session
-                    if not enable_google_speech and not sent_disabled_notice:
-                        try:
-                            await websocket.send_json({
-                                "type": "transcript",
-                                "transcript": "Google Speech-to-Text is disabled.",
-                                "is_final": True
-                            })
-                        except Exception as e:
-                            print(f"Backend: Failed to send disabled transcript: {e}")
-                        print("Backend: Sent placeholder transcription (once per session).")
-                        sent_disabled_notice = True
                 else:
                     print(f"Backend: Received non-audio/non-end_stream message from client (Google Enabled): {message}")
                     # Acknowledge if it's not an audio chunk or end_stream
@@ -252,14 +260,6 @@ async def ws_test(websocket: WebSocket):
     async def stream_to_google_and_send_to_frontend():
         if not global_speech_client or not global_streaming_config:
             print("Backend: Google Speech client not initialized for streaming.")
-            try:
-                await websocket.send_json({
-                    "type": "transcript",
-                    "transcript": "Transcribe is on but Google client is not ready (no credentials).",
-                    "is_final": True
-                })
-            except Exception:
-                pass
             return
         
         try:
@@ -305,13 +305,12 @@ async def ws_test(websocket: WebSocket):
         finally:
             print("Backend: stream_to_google_and_send_to_frontend task ended.")
 
-    # Run both tasks concurrently
+    # Run receiver only; streaming happens only when transcribe is enabled (via queue)
     receive_task = asyncio.create_task(receive_from_frontend())
-    stream_task = asyncio.create_task(stream_to_google_and_send_to_frontend())
 
     # Wait for both tasks to complete or for an error
     try:
-        await asyncio.gather(receive_task, stream_task)
+        await asyncio.gather(receive_task)
     except Exception as e:
         print(f"Backend: Error gathering tasks: {e}")
     finally:
