@@ -46,18 +46,20 @@ export async function renderRecordingPanel(record) {
       <td>${seg && seg.endMs ? new Date(seg.endMs).toLocaleTimeString() : ''}</td>
     `;
     const svcCells = services.map(svc => `<td>${(record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : ''}</td>`).join('');
-    segRowsHtml += `<tr>${leftCells}${svcCells}</tr>`;
+    const hxVals = JSON.stringify({ record: JSON.stringify(record), idx: i }).replace(/"/g, '&quot;');
+    segRowsHtml += `<tr id="segrow-${record.id}-${i}" hx-post="/render/segment_row" hx-trigger="refresh-row" hx-target="this" hx-swap="outerHTML" hx-vals="${hxVals}">${leftCells}${svcCells}</tr>`;
   }
 
   // Full record comparison row: one cell per service
   const fullCells = services.map(svc => `<td>${record.fullAppend[svc.key] || ''}</td>`).join('');
 
+  const fullHxVals = JSON.stringify({ record: JSON.stringify(record) }).replace(/"/g, '&quot;');
   panel.innerHTML = `
     <div style="margin-bottom:8px">
       ${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}
     </div>
     <div style="margin-bottom:8px">${playerAndDownload}</div>
-    <div>
+    <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
       <h3>Full Record</h3>
       <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse; width:100%">
         <thead>

@@ -137,7 +137,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         seg_rows.append(_render_segment_row(record, services, i))
     seg_table = Table(
         THead(seg_header),
-        TBody(*seg_rows),
+        TBody(*seg_rows, id=f"segtbody-{record.get('id','')}")
         border="1",
         cellpadding="4",
         cellspacing="0",
