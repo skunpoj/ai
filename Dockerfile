@@ -14,9 +14,8 @@ RUN apt-get update \
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy your application code
-COPY app.py .
-COPY static ./static
+# Copy the entire application code (includes server/, utils/, static/, etc.)
+COPY . .
 
 # Create a directory for credentials and write the JSON content from an environment variable
 RUN mkdir -p /app/gcp-credentials
