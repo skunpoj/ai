@@ -101,22 +101,8 @@ def services_json() -> List[Dict[str, Any]]:
     return registry_list()
 
 
-def render_panel(req) -> Any:
-    """Render a recording panel (full-record + segments) as an HTMX partial.
-
-    Expects JSON body: { "record": { id, startTs, stopTs, durationMs, audioUrl, serverUrl, serverSizeBytes,
-                                      clientSizeBytes, segments: [...], transcripts: {google, vertex, gemini, aws},
-                                      fullAppend: {...} } }
-    """
-    try:
-        try:
-            data = req.json()
-        except Exception:
-            data = req.form()
-        raw = data.get("record", {})
-        record: Dict[str, Any] = raw if isinstance(raw, dict) else (_json.loads(raw) if isinstance(raw, str) else {})
-    except Exception:
-        record = {}
+def build_panel_html(record: Dict[str, Any]) -> str:
+    """Build the HTML for the panel given a record dict."""
     services = [s for s in services_json() if s.get("enabled")]
 
     def _td(txt: str) -> Any:
@@ -190,7 +176,25 @@ def render_panel(req) -> Any:
         ),
         Div(H3("Segments"), seg_table, style="margin-top:12px")
     )
-    return HTMLResponse(str(panel))
+    return str(panel)
+
+
+def render_panel(req) -> Any:
+    """Render a recording panel (full-record + segments) as an HTMX partial.
+
+    Accepts either JSON or form body with key 'record'.
+    """
+    try:
+        try:
+            data = req.json()
+        except Exception:
+            data = req.form()
+        raw = data.get("record", {})
+        record: Dict[str, Any] = raw if isinstance(raw, dict) else (_json.loads(raw) if isinstance(raw, str) else {})
+    except Exception:
+        record = {}
+    html = build_panel_html(record)
+    return HTMLResponse(html)
 
 
 def _fmt_time(ts: Any) -> str:

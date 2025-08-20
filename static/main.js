@@ -266,6 +266,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     } catch (e) {
                         console.warn('Frontend: Failed to send ping_start:', e);
                     }
+                    // Ensure auto transcribe engages after backend signals ready
+                    if (autoTranscribeToggle && autoTranscribeToggle.checked) {
+                        try { sendJSON(socket, { type: 'transcribe', enabled: true }); } catch (_) {}
+                        if (startTranscribeButton && stopTranscribeButton) {
+                            startTranscribeButton.style.display = 'none';
+                            stopTranscribeButton.style.display = 'none';
+                        }
+                    }
                     // Ensure we have a current recording created on start; just refresh UI
                     ensureRecordingTab(currentRecording);
                     renderRecordingPanel(currentRecording);
