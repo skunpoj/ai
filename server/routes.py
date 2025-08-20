@@ -67,13 +67,13 @@ def build_index():
             Div(
                 Button("Start Recording", id="startRecording"),
                 Button("Stop Recording", id="stopRecording", disabled=True),
+                Button("Segment & Models", id="openSegmentModal"),
             # ),
             # Div(
                 Input(type="checkbox", id="autoTranscribeToggle", checked=True),
                 Label("Auto Transcribe", _for="autoTranscribeToggle"),
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
-                Button("Segment & Models", id="openSegmentModal"),
             ),
             P("Transcription: ", id="transcription"),
             Div(id="liveTranscriptContainer"),
@@ -109,8 +109,12 @@ def render_panel(req) -> Any:
                                       fullAppend: {...} } }
     """
     try:
-        data = req.json()
-        record: Dict[str, Any] = data.get("record", {})
+        try:
+            data = req.json()
+        except Exception:
+            data = req.form()
+        raw = data.get("record", {})
+        record: Dict[str, Any] = raw if isinstance(raw, dict) else (_json.loads(raw) if isinstance(raw, str) else {})
     except Exception:
         record = {}
     services = [s for s in services_json() if s.get("enabled")]
@@ -132,7 +136,8 @@ def render_panel(req) -> Any:
         hx_post="/render/full_row",
         hx_trigger="refresh-full",
         hx_target="this",
-        hx_swap="innerHTML"
+        hx_swap="innerHTML",
+        hx_vals=json.dumps({"record": record})
     )
 
     # Segments table

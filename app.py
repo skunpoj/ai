@@ -23,6 +23,7 @@ from server.routes import build_index, render_panel, render_segment_row, render_
 from server.ws import ws_handler
 from server.services.registry import list_services as registry_list, set_service_enabled
 from typing import Any, List, Dict
+from starlette.responses import JSONResponse
 
 # --- Credentials Handling (START) ---
 cred = ensure_google_credentials_from_env()
@@ -61,12 +62,12 @@ def index() -> Any:
     return build_index()
 
 @rt("/services")
-def list_services() -> List[Dict[str, Any]]:
+def list_services() -> Any:
     """Return JSON array of service descriptors for dynamic frontend columns."""
-    return registry_list()
+    return JSONResponse(registry_list())
 
 @rt("/services", methods=["POST"])
-def update_service(req: Any) -> List[Dict[str, Any]]:
+def update_service(req: Any) -> Any:
     """Enable/disable services dynamically at runtime.
 
     Request JSON body:
@@ -78,9 +79,9 @@ def update_service(req: Any) -> List[Dict[str, Any]]:
         data = req.json()
         key = data.get("key")
         enabled = bool(data.get("enabled", True))
-        return set_service_enabled(key, enabled)
+        return JSONResponse(set_service_enabled(key, enabled))
     except Exception:
-        return registry_list()
+        return JSONResponse(registry_list())
 
 
 @app.ws("/ws_stream") # Dedicated WebSocket endpoint for audio streaming
