@@ -200,13 +200,11 @@ def index():
                 ),
                 id="segmentModal", style="display:none;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999"
             ),
+            # Tabs container: one tab per recording
             Div(
-                H2("Full Recording"),
-                Div(id="fullContainer")
-            ),
-            Div(
-                H2("Segments"),
-                Div(id="segmentContainer")
+                H2("Recordings"),
+                Div(id="recordTabs", style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"),
+                Div(id="recordPanels")
             ),
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
             Script(f"let SEGMENT_MS = {SEGMENT_MS};"),
@@ -217,7 +215,7 @@ def index():
                 f"window.GOOGLE_AUTH_READY = {( 'true' if (global_speech_client and global_streaming_config) else 'false' )};\n"
                 "console.log('Frontend: Google auth on load:', { ready: window.GOOGLE_AUTH_READY, info: window.GOOGLE_AUTH_INFO });"
             ),
-            Script(src="/static/main.js")
+            Script(src="/static/main.js", type="module")
         ) # End Div arguments
 
 
@@ -337,11 +335,16 @@ async def ws_test(websocket: WebSocket):
                             server_file.flush()
                             server_file.close()
                         saved_url = f"/static/recordings/{server_filename}"
+                        file_size_bytes = 0
                         try:
-                            await websocket.send_json({"type": "saved", "url": saved_url})
+                            file_size_bytes = os.path.getsize(server_filepath)
+                        except Exception:
+                            file_size_bytes = 0
+                        try:
+                            await websocket.send_json({"type": "saved", "url": saved_url, "size": file_size_bytes})
                         except Exception as e2:
                             print(f"Backend: Failed to notify client of saved file: {e2}")
-                        print(f"Backend: Saved recording at {server_filepath}")
+                        print(f"Backend: Saved recording at {server_filepath} ({file_size_bytes} bytes)")
                     except Exception as e:
                         print(f"Backend: Error finalizing and notifying saved file: {e}")
                     break
