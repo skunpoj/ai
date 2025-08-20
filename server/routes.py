@@ -142,7 +142,7 @@ def render_panel(req) -> Any:
     segments: List[Dict[str, Any]] = record.get("segments", []) or []
     transcripts: Dict[str, List[str]] = record.get("transcripts", {}) or {}
     # Determine max rows across all providers
-    max_seg = max([len(segments)] + [len(transcripts.get(k, [])) for k in ["google", "vertex", "gemini", "aws"])
+    max_seg = max([len(segments)] + [len(transcripts.get(k, [])) for k in ["google", "vertex", "gemini", "aws"]])
     for i in range(max_seg):
         seg_rows.append(_render_segment_row(record, services, i))
     seg_table = Table(
