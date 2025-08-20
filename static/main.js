@@ -569,18 +569,22 @@ document.addEventListener('DOMContentLoaded', () => {
         ensureRecordingTab(record);
         const panelId = `panel-${record.id}`;
         htmx.ajax('POST', '/render/panel', { target: `#${panelId}`, values: { record: JSON.stringify(record) }, swap: 'innerHTML' });
-        // After panel render, trigger initial full and rows refresh via htmx triggers
-        htmx.trigger(`#fulltable-${record.id}`, 'refresh-full', { detail: { record: JSON.stringify(record) } });
-        const maxSeg = Math.max(
-            record.segments.length,
-            record.transcripts.google.length,
-            record.transcripts.vertex.length,
-            record.transcripts.gemini.length,
-            (record.transcripts.aws || []).length
-        );
-        for (let i = 0; i < maxSeg; i++) {
-            htmx.trigger(`#segrow-${record.id}-${i}`, 'refresh-row', { detail: { record: JSON.stringify(record), idx: i } });
-        }
+        // After panel render, trigger initial full and rows refresh via htmx triggers, but only once nodes exist
+        setTimeout(() => {
+            const fullEl = document.getElementById(`fulltable-${record.id}`);
+            if (fullEl) htmx.trigger(fullEl, 'refresh-full', { detail: { record: JSON.stringify(record) } });
+            const maxSeg = Math.max(
+                record.segments.length,
+                record.transcripts.google.length,
+                record.transcripts.vertex.length,
+                record.transcripts.gemini.length,
+                (record.transcripts.aws || []).length
+            );
+            for (let i = 0; i < maxSeg; i++) {
+                const row = document.getElementById(`segrow-${record.id}-${i}`);
+                if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(record), idx: i } });
+            }
+        }, 0);
     }
 
     async function refreshFullRow(record) {
