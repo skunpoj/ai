@@ -18,9 +18,9 @@ Service = Dict[str, object]
 
 
 _services: Dict[str, Service] = {
-    "google": {"key": "google", "label": "Google STT", "enabled": True},
+    "google": {"key": "google", "label": "Google STT", "enabled": False},
     "vertex": {"key": "vertex", "label": "Gemini (Vertex AI)", "enabled": True},
-    "gemini": {"key": "gemini", "label": "Gemini (API)", "enabled": True},
+    "gemini": {"key": "gemini", "label": "Gemini (API)", "enabled": False},
     # AWS provider can be toggled via env; disabled by default
     "aws": {"key": "aws", "label": "AWS Transcribe (beta)", "enabled": os.environ.get("AWS_TRANSCRIBE_ENABLED", "false").lower() in ("1","true","yes")},
 }
