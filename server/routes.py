@@ -101,7 +101,6 @@ def services_json() -> List[Dict[str, Any]]:
     return registry_list()
 
 
-@rt("/render/panel", methods=["POST"])
 def render_panel(req) -> Any:
     """Render a recording panel (full-record + segments) as an HTMX partial.
 
@@ -230,7 +229,6 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
     )
 
 
-@rt("/render/segment_row", methods=["POST"])
 def render_segment_row(req) -> Any:
     try:
         try:
@@ -255,7 +253,6 @@ def render_segment_row(req) -> Any:
     return resp
 
 
-@rt("/render/full_row", methods=["POST"])
 def render_full_row(req) -> Any:
     try:
         try:
