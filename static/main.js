@@ -577,6 +577,16 @@ document.addEventListener('DOMContentLoaded', () => {
         ensureRecordingTab(record);
         const panelId = `panel-${record.id}`;
         htmx.ajax('POST', '/render/panel', { target: `#${panelId}`, values: { record: JSON.stringify(record) }, swap: 'innerHTML' });
+        // Fallback: if server-render failed (e.g., 4xx) and panel is still empty, render client-side
+        setTimeout(() => {
+            const host = document.getElementById(panelId);
+            if (host && (!host.innerHTML || host.innerHTML.trim() === '')) {
+                try {
+                    const html = renderPanel(record);
+                    if (typeof html === 'string') host.innerHTML = html;
+                } catch (_) {}
+            }
+        }, 150);
         // After panel render, trigger initial full and rows refresh via htmx triggers, but only once nodes exist
         setTimeout(() => {
             const fullEl = document.getElementById(`fulltable-${record.id}`);
