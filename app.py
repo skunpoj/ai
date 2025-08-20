@@ -16,7 +16,41 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from utils.credentials import ensure_google_credentials_from_env
+try:
+    from utils.credentials import ensure_google_credentials_from_env
+except Exception:
+    # Fallback: inline minimal helper if utils package isn't available in the runtime image
+    import tempfile, json as _json
+    def ensure_google_credentials_from_env(env_var: str = "GOOGLE_APPLICATION_CREDENTIALS_JSON"):
+        creds = os.environ.get(env_var)
+        if not creds:
+            print(f"{env_var} not set; proceeding without writing credentials file.")
+            return None
+        try:
+            fd, path = tempfile.mkstemp(suffix=".json")
+            with os.fdopen(fd, 'w') as tmp:
+                tmp.write(creds)
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+            # Build masked info for UI logging
+            try:
+                data = _json.loads(creds)
+                client_email = data.get("client_email", "")
+                private_key_id = data.get("private_key_id", "")
+                project_id = data.get("project_id", "")
+                def mask(v: str) -> str:
+                    return (v[:4] + "..." + v[-4:]) if isinstance(v, str) and len(v) >= 8 else "***"
+                info = {
+                    "project_id": project_id or "",
+                    "client_email_masked": (client_email[:3] + "...@" + client_email.split("@")[-1]) if (client_email and "@" in client_email) else "***",
+                    "private_key_id_masked": mask(private_key_id)
+                }
+            except Exception:
+                info = {}
+            print(f"Google Cloud credentials written to temporary file: {path}")
+            return {"path": path, "info": info}
+        except Exception as e:
+            print(f"Error writing Google Cloud credentials to temporary file: {e}")
+            return None
 from server.config import CHUNK_MS, SEGMENT_MS_DEFAULT
 from server.state import app_state
 from server.routes import build_index
