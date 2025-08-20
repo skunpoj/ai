@@ -9,6 +9,13 @@ ENABLE_GOOGLE_SPEECH = True
 # Load .env before reading any credential env vars
 load_dotenv()
 
+import sys
+from pathlib import Path
+# Ensure project root is on sys.path so 'utils' and 'server' are importable in all environments
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from utils.credentials import ensure_google_credentials_from_env
 from server.config import CHUNK_MS, SEGMENT_MS_DEFAULT
 from server.state import app_state
