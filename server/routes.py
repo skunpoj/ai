@@ -193,8 +193,12 @@ def render_panel(req) -> Any:
         record: Dict[str, Any] = raw if isinstance(raw, dict) else (_json.loads(raw) if isinstance(raw, str) else {})
     except Exception:
         record = {}
-    html = build_panel_html(record)
-    return HTMLResponse(html)
+    try:
+        html = build_panel_html(record)
+        return HTMLResponse(html)
+    except Exception:
+        # Never 400; return empty panel so client can continue
+        return HTMLResponse("")
 
 
 def _fmt_time(ts: Any) -> str:
