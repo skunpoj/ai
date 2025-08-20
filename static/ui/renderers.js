@@ -45,13 +45,13 @@ export async function renderRecordingPanel(record) {
       <td>${seg && seg.startMs ? new Date(seg.startMs).toLocaleTimeString() : ''}</td>
       <td>${seg && seg.endMs ? new Date(seg.endMs).toLocaleTimeString() : ''}</td>
     `;
-    const svcCells = services.map(svc => `<td>${(record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : ''}</td>`).join('');
+    const svcCells = services.map(svc => `<td data-svc="${svc.key}">${(record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : ''}</td>`).join('');
     const hxVals = JSON.stringify({ record: JSON.stringify(record), idx: i }).replace(/"/g, '&quot;');
     segRowsHtml += `<tr id="segrow-${record.id}-${i}" hx-post="/render/segment_row" hx-trigger="refresh-row" hx-target="this" hx-swap="outerHTML" hx-vals="${hxVals}">${leftCells}${svcCells}</tr>`;
   }
 
   // Full record comparison row: one cell per service
-  const fullCells = services.map(svc => `<td>${record.fullAppend[svc.key] || ''}</td>`).join('');
+  const fullCells = services.map(svc => `<td data-svc="${svc.key}">${record.fullAppend[svc.key] || ''}</td>`).join('');
 
   const fullHxVals = JSON.stringify({ record: JSON.stringify(record) }).replace(/"/g, '&quot;');
   panel.innerHTML = `
