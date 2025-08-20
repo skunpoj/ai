@@ -1,3 +1,4 @@
+// Convert a byte count into a human-readable label like '123 KB' or '1.25 MB'
 export function bytesToLabel(bytes) {
     if (typeof bytes !== 'number') return '';
     if (bytes < 1024) return `${bytes} B`;

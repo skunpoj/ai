@@ -135,6 +135,77 @@ Initially, this project encountered a `CERTIFICATE_VERIFY_FAILED: unable to get 
 
 While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` environment variable, these did not resolve the issue. The decision was made to shift to a web-based application using `python-fasthtml` and Docker for deployment. In deployed environments (especially cloud platforms), SSL certificate handling is typically managed by load balancers or the platform itself, often circumventing these local certificate issues.
 
+### Architecture (Modular Transcription)
+
+- app.py: boots the app, loads credentials (via `utils/credentials.py`), initializes provider state (`server/state.py`), and wires routes and WebSocket.
+- server/config.py: constants (CHUNK_MS, SEGMENT_MS_DEFAULT, language, etc.).
+- server/state.py: initializes and stores provider clients (Google STT, Gemini API, Vertex) with masked auth info for UI.
+- server/routes.py: builds the index page; exposes `GET /services` for dynamic columns.
+- server/ws.py: handles WebSocket for audio segments, full upload, and dispatches to enabled providers.
+- server/services/
+  - google_stt.py: Google per-segment recognition helper
+  - vertex_gemini.py: Vertex helpers (build contents, extract text)
+  - gemini_api.py: Gemini API text extraction
+  - aws_transcribe.py: AWS Transcribe scaffold (S3/streaming to be implemented)
+  - registry.py: runtime registry; toggle services via `POST /services {key, enabled}`
+- static/
+  - main.js: UI logic (tabs per recording, segments grid, fetching services)
+  - audio/pcm-worklet.js: AudioWorkletNode processor for PCM16 capture
+  - ui/services.js: fetches `/services`
+  - ui/format.js, ui/tabs.js: utilities
+
+### Admin toggles
+
+The index page includes an Admin section (service toggles) that calls `POST /services` to enable/disable providers at runtime. The frontend then re-renders using `GET /services` to build columns dynamically.
+
+### Frontend lint/format (optional)
+
+If you want linting/formatting, add the following files and run with npm:
+
+1. package.json
+```json
+{
+  "name": "transcription-ui",
+  "private": true,
+  "devDependencies": {
+    "eslint": "^9.9.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3"
+  },
+  "scripts": {
+    "lint": "eslint \"static/**/*.js\"",
+    "format": "prettier --write \"static/**/*.js\""
+  }
+}
+```
+
+2. .eslintrc.json
+```json
+{
+  "env": { "browser": true, "es2022": true },
+  "extends": ["eslint:recommended", "prettier"],
+  "parserOptions": { "ecmaVersion": 2022, "sourceType": "module" },
+  "rules": {}
+}
+```
+
+3. .prettierrc
+```json
+{
+  "singleQuote": true,
+  "semi": true
+}
+```
+
+### Adding a provider
+
+1. Server:
+   - Implement per-segment recognition helper under `server/services/`.
+   - Register provider in `server/services/registry.py` (key, label, enabled).
+   - Dispatch in `server/ws.py` when enabled in registry.
+2. Frontend:
+   - No change needed for columns; the UI reads `/services` and renders accordingly.
+
 ### Vertex AI Gemini with Service Accounts (Optional, Parallel Transcription)
 
 To run Gemini using your service account (no API key), enable the Vertex AI SDK mode:
@@ -155,3 +226,21 @@ To run Gemini using your service account (no API key), enable the Vertex AI SDK 
      ```
 
 With these set, the backend will prefer Vertex AI Gemini for per-segment transcription and fall back to Google consumer `google-generativeai` only if `GEMINI_API_KEY` is set and Vertex isn’t configured.
+
+### Provider troubleshooting and setup
+
+Google Cloud Speech-to-Text
+- Ensure `GOOGLE_APPLICATION_CREDENTIALS_JSON` is set to the full JSON content of the service account key (the app writes it to a temp file).
+- Confirm project and key are valid; UI logs masked auth status to console.
+
+Gemini (API)
+- Set `GEMINI_API_KEY` to enable the consumer Gemini API model.
+- If not set, the app skips Gemini API, and only Vertex/Google run.
+
+Vertex Gemini
+- Set `GOOGLE_CLOUD_PROJECT` and optionally `GOOGLE_CLOUD_LOCATION` (defaults to `us-central1`).
+- Requires service account with Vertex permissions; the project id is inferred from the service account if not set.
+
+AWS Transcribe (planned)
+- Set `AWS_TRANSCRIBE_ENABLED=true` to show the AWS column (scaffold only).
+- For full integration: configure S3 bucket and IAM, then implement segment upload + StartTranscriptionJob or streaming in `server/services/aws_transcribe.py` and dispatch in `server/ws.py` (already scaffolded).

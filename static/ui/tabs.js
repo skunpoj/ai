@@ -1,3 +1,4 @@
+// Create a tab button and content panel for a given recording, if it doesn't exist
 export function ensureTab(tabsBar, panelsHost, record) {
     const existing = document.getElementById(`tab-${record.id}`);
     if (existing) return;
@@ -14,6 +15,7 @@ export function ensureTab(tabsBar, panelsHost, record) {
     activateTab(tabsBar, panelsHost, record.id);
 }
 
+// Activate a tab by record id; shows its panel and styles the active tab button
 export function activateTab(tabsBar, panelsHost, recordId) {
     [...panelsHost.children].forEach(ch => ch.style.display = 'none');
     const panel = document.getElementById(`panel-${recordId}`);

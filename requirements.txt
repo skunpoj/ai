@@ -4,3 +4,4 @@ websockets # For potential future real-time audio streaming (optional for now)
 python-dotenv
 google-generativeai
 google-genai
+boto3
