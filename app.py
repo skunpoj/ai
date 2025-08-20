@@ -93,15 +93,15 @@ async def ws_test(websocket: WebSocket):
         print(f"Error in ws_handler: {e}")
 
 # Register HTMX partial endpoints here to avoid decorator dependency on 'rt' in server.routes
-@rt("/render/panel", methods=["POST"])
+@rt("/render/panel", methods=["GET","POST"])
 def render_panel_route(req: Any) -> Any:
     return render_panel(req)
 
-@rt("/render/segment_row", methods=["POST"])
+@rt("/render/segment_row", methods=["GET","POST"])
 def render_segment_row_route(req: Any) -> Any:
     return render_segment_row(req)
 
-@rt("/render/full_row", methods=["POST"])
+@rt("/render/full_row", methods=["GET","POST"])
 def render_full_row_route(req: Any) -> Any:
     return render_full_row(req)
 
