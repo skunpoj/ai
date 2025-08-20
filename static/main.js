@@ -237,7 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
                 // If Auto Transcribe is ON, immediately start transcribing
-                if (autoTranscribeToggle && autoTranscribeToggle.dataset.state === 'on') {
+                if (autoTranscribeToggle && autoTranscribeToggle.checked) {
                     try { sendJSON(socket, { type: 'transcribe', enabled: true }); } catch(_) {}
                     startTranscribeButton.style.display = 'none';
                     stopTranscribeButton.style.display = 'none';
@@ -252,7 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
             };
 
             // WebSocket message handler: updates UI and recording state
-            socket.onmessage = event => {
+            socket.onmessage = async event => {
                 console.log('Frontend: Received WebSocket message:', event.data);
                 const data = parseWSMessage(event);
                 if (!data) return;
@@ -489,7 +489,7 @@ document.addEventListener('DOMContentLoaded', () => {
         stopRecordingButton.disabled = true;
         startTranscribeButton.disabled = true; // disable transcribe controls when not recording
         stopTranscribeButton.disabled = true;
-        if (autoTranscribeToggle && autoTranscribeToggle.dataset.state === 'on') {
+        if (autoTranscribeToggle && autoTranscribeToggle.checked) {
             // Ensure we notify backend to stop transcribe when auto mode ends
             try { if (socket && socket.readyState === WebSocket.OPEN) sendJSON(socket, { type: 'transcribe', enabled: false }); } catch(_) {}
         }
@@ -511,16 +511,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (e) { console.warn('Frontend: failed to send transcribe=true', e); }
     });
-    // Auto Transcribe Toggle
+    // Auto Transcribe Toggle (checkbox, default ON)
     if (autoTranscribeToggle) {
-        autoTranscribeToggle.dataset.state = 'off';
-        autoTranscribeToggle.addEventListener('click', () => {
-            const on = autoTranscribeToggle.dataset.state === 'on';
-            const next = on ? 'off' : 'on';
-            autoTranscribeToggle.dataset.state = next;
-            autoTranscribeToggle.textContent = `Auto Transcribe: ${next.toUpperCase()}`;
-            // Hide/show manual controls accordingly
-            if (next === 'on') {
+        const applyAutoState = () => {
+            const isOn = !!autoTranscribeToggle.checked;
+            if (isOn) {
                 startTranscribeButton.style.display = 'none';
                 stopTranscribeButton.style.display = 'none';
                 // If socket open and recording, start transcribe
@@ -529,7 +524,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 startTranscribeButton.style.display = '';
                 stopTranscribeButton.style.display = '';
             }
-        });
+        };
+        autoTranscribeToggle.addEventListener('change', applyAutoState);
+        // Apply initial state from server (checked by default)
+        applyAutoState();
     }
     stopTranscribeButton.addEventListener('click', () => {
         enableGoogleSpeech = false;

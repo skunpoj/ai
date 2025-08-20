@@ -63,14 +63,14 @@ def build_index():
     title = "Live Transcription & Translation"
     return Title(title), \
         Link(rel="icon", href="/static/favicon.ico"), \
-        H1(title), \
         Div(
             Div(
                 Button("Start Recording", id="startRecording"),
                 Button("Stop Recording", id="stopRecording", disabled=True),
-            ),
-            Div(
-                Button("Auto Transcribe: OFF", id="autoTranscribeToggle", disabled=True),
+            # ),
+            # Div(
+                Input(type="checkbox", id="autoTranscribeToggle", checked=True),
+                Label("Auto Transcribe", _for="autoTranscribeToggle"),
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
                 Button("Segment & Models", id="openSegmentModal"),
