@@ -27,11 +27,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastChunkBlob = null; // unused in timeslice mode
     let segmentStartTs = null; // unused in timeslice mode
     let segmentRotate = false; // when true, onstop restarts recorder with new timeslice
+    // ETag caches for conditional fragment refreshes
+    const etagCache = { full: new Map(), rows: new Map() }; // maps by recordId -> etag / idx->etag
 
     const startRecordingButton = document.getElementById('startRecording');
     const stopRecordingButton = document.getElementById('stopRecording');
     const startTranscribeButton = document.getElementById('startTranscribe');
     const stopTranscribeButton = document.getElementById('stopTranscribe');
+    const autoTranscribeToggle = document.getElementById('autoTranscribeToggle');
     const transcriptionElement = document.getElementById('transcription');
     const liveTranscriptContainer = document.getElementById('liveTranscriptContainer');
     const recordingsContainer = document.getElementById('recordingsContainer');
@@ -44,7 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const segmentModal = document.getElementById('segmentModal');
     const closeSegmentModalBtn = document.getElementById('closeSegmentModal');
     const fullTranscriptContainer = document.getElementById('fullTranscriptContainer');
-    const serviceAdminRoot = document.getElementById('serviceAdmin');
+    const serviceAdminRoot = null; // removed separate admin; now in modal
     // Recorder helpers
     let currentStream = null;
     let recOptions = {};
@@ -104,45 +107,41 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
-    if (openSegmentModalBtn && segmentModal) openSegmentModalBtn.addEventListener('click', () => { segmentModal.style.display = 'block'; });
+    if (openSegmentModalBtn && segmentModal) openSegmentModalBtn.addEventListener('click', async () => {
+        segmentModal.style.display = 'block';
+        // Initialize provider checkboxes to reflect backend registry
+        try {
+            const map = {
+                google: document.getElementById('svc_google'),
+                vertex: document.getElementById('svc_vertex'),
+                gemini: document.getElementById('svc_gemini'),
+                aws: document.getElementById('svc_aws')
+            };
+            const svcs = await getServices();
+            svcs.forEach(s => { if (map[s.key]) map[s.key].checked = !!s.enabled; });
+        } catch (_) {}
+    });
     if (closeSegmentModalBtn && segmentModal) closeSegmentModalBtn.addEventListener('click', () => { segmentModal.style.display = 'none'; });
 
-    // Admin: load and render service toggles
-    /**
-     * Render admin service toggles and wire POST /services to enable/disable providers.
-     * @returns {Promise<void>}
-     */
-    async function loadAndRenderServiceAdmin() {
-        if (!serviceAdminRoot) return;
-        const svcs = await getServices();
-        serviceAdminRoot.innerHTML = '';
-        const container = document.createElement('div');
-        svcs.forEach(svc => {
-            const row = document.createElement('div');
-            row.style.marginBottom = '4px';
-            const label = document.createElement('label');
-            label.style.display = 'inline-flex';
-            label.style.alignItems = 'center';
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.checked = !!svc.enabled;
-            cb.addEventListener('change', async () => {
+    // Wire provider toggles in modal to backend
+    async function wireProviderModal() {
+        const map = {
+            google: document.getElementById('svc_google'),
+            vertex: document.getElementById('svc_vertex'),
+            gemini: document.getElementById('svc_gemini'),
+            aws: document.getElementById('svc_aws')
+        };
+        for (const [key, el] of Object.entries(map)) {
+            if (!el) continue;
+            el.addEventListener('change', async () => {
                 try {
-                    await fetch('/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: svc.key, enabled: cb.checked }) });
-                    // Re-render current panel so columns can update if needed
+                    await fetch('/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, enabled: el.checked }) });
                     if (currentRecording) await renderRecordingPanel(currentRecording);
-                } catch (e) { console.warn('Admin: toggle failed', e); }
+                } catch (e) { console.warn('Provider toggle failed', key); }
             });
-            const span = document.createElement('span');
-            span.textContent = ` ${svc.label} (${svc.key})`;
-            label.appendChild(cb);
-            label.appendChild(span);
-            row.appendChild(label);
-            container.appendChild(row);
-        });
-        serviceAdminRoot.appendChild(container);
+        }
     }
-    loadAndRenderServiceAdmin();
+    wireProviderModal();
 
     // Start a new recording session; create a new tab immediately,
     // connect the websocket, and start the full and segment recorders.
@@ -238,6 +237,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
+                // If Auto Transcribe is ON, immediately start transcribing
+                if (autoTranscribeToggle && autoTranscribeToggle.dataset.state === 'on') {
+                    try { sendJSON(socket, { type: 'transcribe', enabled: true }); } catch(_) {}
+                    startTranscribeButton.style.display = 'none';
+                    stopTranscribeButton.style.display = 'none';
+                } else {
+                    startTranscribeButton.style.display = '';
+                    stopTranscribeButton.style.display = '';
+                }
                 // Start continuous full recorder
                 try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); } catch (e) { console.warn('Frontend: start on open failed:', e); }
                 // Start per-segment recorder loop to guarantee fresh headers/footers per segment
@@ -284,7 +292,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
                         const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
                         currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime, size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
-                        renderRecordingPanel(currentRecording);
+                        // Refresh only the affected row
+                        await refreshSegmentRow(currentRecording, segIndex);
                     }
                 } else if (data.type === 'segment_transcript' || data.type === 'segment_transcript_google') {
                     const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
@@ -295,7 +304,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         while (currentRecording.transcripts.google.length <= segIndex) currentRecording.transcripts.google.push('');
                         currentRecording.transcripts.google[segIndex] = data.transcript || '';
                         if (data.transcript) currentRecording.fullAppend.google = `${currentRecording.fullAppend.google}${currentRecording.fullAppend.google ? ' ' : ''}${data.transcript}`.trim();
-                        renderRecordingPanel(currentRecording);
+                        await refreshSegmentRow(currentRecording, segIndex);
+                        await refreshFullRow(currentRecording);
                     }
                 } else if (data.type === 'segment_transcript_vertex') {
                     const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
@@ -306,7 +316,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         while (currentRecording.transcripts.vertex.length <= segIndex) currentRecording.transcripts.vertex.push('');
                         currentRecording.transcripts.vertex[segIndex] = data.transcript || '';
                         if (data.transcript) currentRecording.fullAppend.vertex = `${currentRecording.fullAppend.vertex}${currentRecording.fullAppend.vertex ? ' ' : ''}${data.transcript}`.trim();
-                        renderRecordingPanel(currentRecording);
+                        await refreshSegmentRow(currentRecording, segIndex);
+                        await refreshFullRow(currentRecording);
                     }
                 } else if (data.type === 'segment_transcript_gemini') {
                     const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
@@ -317,7 +328,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         while (currentRecording.transcripts.gemini.length <= segIndex) currentRecording.transcripts.gemini.push('');
                         currentRecording.transcripts.gemini[segIndex] = data.transcript || '';
                         if (data.transcript) currentRecording.fullAppend.gemini = `${currentRecording.fullAppend.gemini}${currentRecording.fullAppend.gemini ? ' ' : ''}${data.transcript}`.trim();
-                        renderRecordingPanel(currentRecording);
+                        await refreshSegmentRow(currentRecording, segIndex);
+                        await refreshFullRow(currentRecording);
                     }
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
@@ -326,7 +338,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (currentRecording) {
                         currentRecording.serverUrl = savedUrl;
                         if (typeof data.size === 'number') currentRecording.serverSizeBytes = data.size;
-                        renderRecordingPanel(currentRecording);
+                        await refreshFullRow(currentRecording);
                     }
                     if (savedCloseTimer) {
                         clearTimeout(savedCloseTimer);
@@ -478,6 +490,10 @@ document.addEventListener('DOMContentLoaded', () => {
         stopRecordingButton.disabled = true;
         startTranscribeButton.disabled = true; // disable transcribe controls when not recording
         stopTranscribeButton.disabled = true;
+        if (autoTranscribeToggle && autoTranscribeToggle.dataset.state === 'on') {
+            // Ensure we notify backend to stop transcribe when auto mode ends
+            try { if (socket && socket.readyState === WebSocket.OPEN) sendJSON(socket, { type: 'transcribe', enabled: false }); } catch(_) {}
+        }
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             mediaRecorder.stop();
         }
@@ -496,6 +512,26 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (e) { console.warn('Frontend: failed to send transcribe=true', e); }
     });
+    // Auto Transcribe Toggle
+    if (autoTranscribeToggle) {
+        autoTranscribeToggle.dataset.state = 'off';
+        autoTranscribeToggle.addEventListener('click', () => {
+            const on = autoTranscribeToggle.dataset.state === 'on';
+            const next = on ? 'off' : 'on';
+            autoTranscribeToggle.dataset.state = next;
+            autoTranscribeToggle.textContent = `Auto Transcribe: ${next.toUpperCase()}`;
+            // Hide/show manual controls accordingly
+            if (next === 'on') {
+                startTranscribeButton.style.display = 'none';
+                stopTranscribeButton.style.display = 'none';
+                // If socket open and recording, start transcribe
+                try { if (socket && socket.readyState === WebSocket.OPEN) sendJSON(socket, { type: 'transcribe', enabled: true }); } catch(_) {}
+            } else {
+                startTranscribeButton.style.display = '';
+                stopTranscribeButton.style.display = '';
+            }
+        });
+    }
     stopTranscribeButton.addEventListener('click', () => {
         enableGoogleSpeech = false;
         startTranscribeButton.disabled = false;
@@ -509,19 +545,11 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) { console.warn('Frontend: failed to send transcribe=false', e); }
     });
 
-    // Manual connection check button
-    testConnBtn.addEventListener('click', () => {
-        if (!socket) {
-            alert('Socket not created yet. Click Start Recording first.');
-            return;
-        }
-        try {
-            socket.send(JSON.stringify({ type: 'ping' }));
-            connStatus.innerText = 'WebSocket: ping sent';
-        } catch (e) {
-            console.warn('Frontend: ping send failed:', e);
-            connStatus.innerText = 'WebSocket: ping failed';
-        }
+    // Manual connection check button (inside modal)
+    if (testConnBtn) testConnBtn.addEventListener('click', () => {
+        if (!socket) { alert('Socket not created yet. Click Start Recording first.'); return; }
+        try { socket.send(JSON.stringify({ type: 'ping' })); connStatus.innerText = 'WebSocket: ping sent'; }
+        catch (e) { console.warn('Frontend: ping send failed:', e); connStatus.innerText = 'WebSocket: ping failed'; }
     });
 
     /**
@@ -540,7 +568,55 @@ document.addEventListener('DOMContentLoaded', () => {
      * @param {object} record
      * @returns {Promise<void>}
      */
-    async function renderRecordingPanel(record) { await renderPanel(record); }
+    async function renderRecordingPanel(record) {
+        ensureRecordingTab(record);
+        const panelId = `panel-${record.id}`;
+        htmx.ajax('POST', '/render/panel', { target: `#${panelId}`, values: { record: JSON.stringify(record) }, swap: 'innerHTML' });
+        // After panel render, trigger initial full and rows refresh via htmx triggers
+        htmx.trigger(`#fulltable-${record.id}`, 'refresh-full', { headers: { 'HX-ETag': etagCache.full.get(record.id) || '' }, detail: { record: JSON.stringify(record) } });
+        const maxSeg = Math.max(
+            record.segments.length,
+            record.transcripts.google.length,
+            record.transcripts.vertex.length,
+            record.transcripts.gemini.length,
+            (record.transcripts.aws || []).length
+        );
+        for (let i = 0; i < maxSeg; i++) {
+            htmx.trigger(`#segrow-${record.id}-${i}`, 'refresh-row', { headers: { 'HX-ETag': (etagCache.rows.get(record.id) || new Map()).get(i) || '' }, detail: { record: JSON.stringify(record), idx: i } });
+        }
+    }
+
+    async function refreshFullRow(record) {
+        const table = document.getElementById(`fulltable-${record.id}`);
+        if (!table) return;
+        const prev = etagCache.full.get(record.id) || '';
+        // Trigger htmx update via the element's declared hx-* attributes
+        htmx.trigger(`#fulltable-${record.id}`, 'refresh-full', { headers: { 'HX-ETag': prev }, detail: { record: JSON.stringify(record) } });
+    }
+
+    async function refreshSegmentRows(record) {
+        const maxSeg = Math.max(
+            record.segments.length,
+            record.transcripts.google.length,
+            record.transcripts.vertex.length,
+            record.transcripts.gemini.length,
+            (record.transcripts.aws || []).length
+        );
+        for (let i = 0; i < maxSeg; i++) {
+            await refreshSegmentRow(record, i);
+        }
+    }
+
+    async function refreshSegmentRow(record, idx) {
+        const rowId = `segrow-${record.id}-${idx}`;
+        const rowEl = document.getElementById(rowId);
+        if (!rowEl) return;
+        if (!etagCache.rows.has(record.id)) etagCache.rows.set(record.id, new Map());
+        const rowMap = etagCache.rows.get(record.id);
+        const prev = rowMap.get(idx) || '';
+        // Trigger htmx update per row using the row's hx-* attributes
+        htmx.trigger(`#${rowId}`, 'refresh-row', { headers: { 'HX-ETag': prev }, detail: { record: JSON.stringify(record), idx } });
+    }
 
     function displayRecordings() {
         // Kept for compatibility if other code calls it; re-render active panel if any currentRecording

@@ -13,6 +13,7 @@ from server.state import app_state
 from server.config import SAMPLE_RATE_HZ
 from server.services.google_stt import recognize_segment as recognize_google_segment
 from server.services.vertex_gemini import build_vertex_contents, extract_text_from_vertex_response
+from server.services.vertex_langchain import is_available as lc_vertex_available, transcribe_segment_via_langchain
 from server.services.gemini_api import extract_text_from_gemini_response
 from server.services.registry import is_enabled as service_enabled
 from server.services import aws_transcribe
@@ -143,21 +144,28 @@ async def ws_handler(websocket: WebSocket) -> None:
                             async def do_vertex(idx: int, b: bytes, ext: str):
                                 try:
                                     order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
-                                    resp = None
-                                    last_exc = None
-                                    for mt in order:
-                                        try:
-                                            resp = app_state.vertex_client.models.generate_content(
-                                                model=app_state.vertex_model_name,
-                                                contents=build_vertex_contents(b, mt)
-                                            )
-                                            break
-                                        except Exception as ie:
-                                            last_exc = ie
-                                            continue
-                                    if resp is None and last_exc:
-                                        raise last_exc
-                                    text = extract_text_from_vertex_response(resp)
+                                    text = ""
+                                    if lc_vertex_available():
+                                        for mt in order:
+                                            text = transcribe_segment_via_langchain(app_state.vertex_client, app_state.vertex_model_name, b, mt)
+                                            if text:
+                                                break
+                                    else:
+                                        resp = None
+                                        last_exc = None
+                                        for mt in order:
+                                            try:
+                                                resp = app_state.vertex_client.models.generate_content(
+                                                    model=app_state.vertex_model_name,
+                                                    contents=build_vertex_contents(b, mt)
+                                                )
+                                                break
+                                            except Exception as ie:
+                                                last_exc = ie
+                                                continue
+                                        if resp is None and last_exc:
+                                            raise last_exc
+                                        text = extract_text_from_vertex_response(resp)
                                     await websocket.send_json({"type": "segment_transcript_vertex", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
                                 except Exception as e:
                                     print(f"WS error vertex segment: {e}")

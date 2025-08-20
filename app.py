@@ -26,11 +26,11 @@ except Exception:
         if not creds:
             print(f"{env_var} not set; proceeding without writing credentials file.")
             return None
-        try:
-            fd, path = tempfile.mkstemp(suffix=".json")
-            with os.fdopen(fd, 'w') as tmp:
+    try:
+        fd, path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, 'w') as tmp:
                 tmp.write(creds)
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
             # Build masked info for UI logging
             try:
                 data = _json.loads(creds)
@@ -46,10 +46,10 @@ except Exception:
                 }
             except Exception:
                 info = {}
-            print(f"Google Cloud credentials written to temporary file: {path}")
+        print(f"Google Cloud credentials written to temporary file: {path}")
             return {"path": path, "info": info}
-        except Exception as e:
-            print(f"Error writing Google Cloud credentials to temporary file: {e}")
+    except Exception as e:
+        print(f"Error writing Google Cloud credentials to temporary file: {e}")
             return None
 from server.config import CHUNK_MS, SEGMENT_MS_DEFAULT
 from server.state import app_state

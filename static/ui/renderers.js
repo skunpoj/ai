@@ -28,7 +28,7 @@ export async function renderRecordingPanel(record) {
   const playerAndDownload = `${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''} ${record.serverUrl ? `<a href="${record.serverUrl}" download>Download</a>` : ''} ${sizeLabel ? `(${sizeLabel})` : ''}`;
 
   // Fetch current services dynamically from backend
-  const services = await getServices();
+  const services = (await getServices()).filter(s => !!s.enabled);
 
   // Segments grid rows
   let segRowsHtml = '';

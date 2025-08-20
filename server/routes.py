@@ -10,6 +10,9 @@ from fasthtml.common import *
 from server.config import CHUNK_MS, SEGMENT_MS_DEFAULT
 from server.state import app_state
 from server.services.registry import list_services as registry_list
+from starlette.responses import HTMLResponse
+import hashlib
+import json as _json
 
 
 def build_segment_modal() -> Any:
@@ -29,9 +32,21 @@ def build_segment_modal() -> Any:
         Input(type="radio", name="segmentLen", id="seg300", value="300000"), Label("300s", _for="seg300"),
     )
     len_group = Div(first_row, second_row, id="segmentLenGroup")
+    provider_checks = Div(
+        H3("Providers"),
+        Div(
+            Input(type="checkbox", id="svc_google", checked=True), Label("Google STT", _for="svc_google"),
+            Input(type="checkbox", id="svc_vertex", checked=True), Label("Gemini Vertex", _for="svc_vertex"),
+            Input(type="checkbox", id="svc_gemini", checked=True), Label("Gemini API", _for="svc_gemini"),
+            Input(type="checkbox", id="svc_aws"), Label("AWS (beta)", _for="svc_aws"),
+            id="providerCheckboxes", style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px"
+        ),
+        Div(Button("Check Connection", id="testConnection"), P("WebSocket: not connected", id="connStatus"))
+    )
     content = Div(
-        H3("Segment length"),
+        H3("Segment & Models"),
         len_group,
+        provider_checks,
         Button("Close", id="closeSegmentModal"),
         id="segmentModalContent",
         style="background:#222;padding:16px;border:1px solid #444;max-width:520px;margin:10% auto",
@@ -50,21 +65,15 @@ def build_index():
         Link(rel="icon", href="/static/favicon.ico"), \
         H1(title), \
         Div(
-            # Admin: service toggles
-            Div(
-                H2("Admin: Services"),
-                Div(id="serviceAdmin", style="margin-bottom:12px"),
-            ),
             Div(
                 Button("Start Recording", id="startRecording"),
                 Button("Stop Recording", id="stopRecording", disabled=True),
-                Button("Check Connection", id="testConnection"),
-                P("WebSocket: not connected", id="connStatus"),
             ),
             Div(
+                Button("Auto Transcribe: OFF", id="autoTranscribeToggle", disabled=True),
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
-                Button("Segment length", id="openSegmentModal"),
+                Button("Segment & Models", id="openSegmentModal"),
             ),
             P("Transcription: ", id="transcription"),
             Div(id="liveTranscriptContainer"),
@@ -74,6 +83,7 @@ def build_index():
                 Div(id="recordTabs", style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"),
                 Div(id="recordPanels")
             ),
+            Script(src="https://unpkg.com/htmx.org@1.9.12"),
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
             Script(f"let SEGMENT_MS = {SEGMENT_MS_DEFAULT};"),
             Script("window.SEGMENT_MS = SEGMENT_MS;"),
@@ -90,4 +100,183 @@ def services_json() -> List[Dict[str, Any]]:
     """Return current services from registry; frontend adapts columns dynamically."""
     return registry_list()
 
+
+@rt("/render/panel", methods=["POST"])
+def render_panel(req) -> Any:
+    """Render a recording panel (full-record + segments) as an HTMX partial.
+
+    Expects JSON body: { "record": { id, startTs, stopTs, durationMs, audioUrl, serverUrl, serverSizeBytes,
+                                      clientSizeBytes, segments: [...], transcripts: {google, vertex, gemini, aws},
+                                      fullAppend: {...} } }
+    """
+    try:
+        data = req.json()
+        record: Dict[str, Any] = data.get("record", {})
+    except Exception:
+        record = {}
+    services = [s for s in services_json() if s.get("enabled")]
+
+    def _td(txt: str) -> Any:
+        return Td(txt)
+
+    # Full record section
+    full_header = Tr(*[Th(s["label"]) for s in services])
+    full_row = Tr(*[Td((record.get("fullAppend", {}) or {}).get(s["key"], "")) for s in services], id=f"fullrow-{record.get('id','')}")
+    full_table = Table(
+        THead(full_header),
+        TBody(full_row),
+        border="1",
+        cellpadding="4",
+        cellspacing="0",
+        style="border-collapse:collapse; width:100%",
+        id=f"fulltable-{record.get('id','')}",
+        hx_post="/render/full_row",
+        hx_trigger="refresh-full",
+        hx_target="this",
+        hx_swap="innerHTML"
+    )
+
+    # Segments table
+    seg_header = Tr(Th("Segment"), Th("Start"), Th("End"), *[Th(s["label"]) for s in services])
+    seg_rows: List[Any] = []
+    segments: List[Dict[str, Any]] = record.get("segments", []) or []
+    transcripts: Dict[str, List[str]] = record.get("transcripts", {}) or {}
+    # Determine max rows across all providers
+    max_seg = max([len(segments)] + [len(transcripts.get(k, [])) for k in ["google", "vertex", "gemini", "aws"])
+    for i in range(max_seg):
+        seg_rows.append(_render_segment_row(record, services, i))
+    seg_table = Table(
+        THead(seg_header),
+        TBody(*seg_rows),
+        border="1",
+        cellpadding="4",
+        cellspacing="0",
+        style="border-collapse:collapse; width:100%",
+        id=f"segtable-{record.get('id','')}"
+    )
+
+    # Header info
+    started = record.get("startTs")
+    ended = record.get("stopTs")
+    dur_ms = record.get("durationMs") or 0
+    dur_s = int(dur_ms/1000) if isinstance(dur_ms, int) else 0
+    hdr = Div(
+        (f"Start: {_fmt_time(started)} · End: {_fmt_time(ended)} · Duration: {dur_s}s" if started and ended else ""),
+        style="margin-bottom:8px"
+    )
+    # Player + download
+    player_bits: List[Any] = []
+    if record.get("audioUrl"):
+        player_bits.append(Audio(Source(src=record["audioUrl"], type="audio/webm"), controls=True))
+    if record.get("serverUrl"):
+        player_bits.append(Space(" "))
+        player_bits.append(A("Download", href=record["serverUrl"], download=True))
+    if isinstance(record.get("serverSizeBytes"), int) and record["serverSizeBytes"] > 0:
+        kb = int(record["serverSizeBytes"]/1024)
+        player_bits.append(Space(f" ({kb} KB)"))
+    player_div = Div(*player_bits, style="margin-bottom:8px")
+
+    panel = Div(
+        hdr,
+        player_div,
+        Div(
+            H3("Full Record"),
+            full_table,
+            Div("Live (finalized) Google stream: " + (record.get("fullAppend", {}).get("googleLive", "") or ""), style="margin-top:6px;font-size:12px;color:#aaa")
+        ),
+        Div(H3("Segments"), seg_table, style="margin-top:12px")
+    )
+    return panel
+
+
+def _fmt_time(ts: Any) -> str:
+    try:
+        import datetime
+        return datetime.datetime.fromtimestamp(int(ts)/1000).strftime("%H:%M:%S")
+    except Exception:
+        return ""
+
+
+def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], idx: int) -> Any:
+    segments: List[Dict[str, Any]] = record.get("segments", []) or []
+    transcripts: Dict[str, List[str]] = record.get("transcripts", {}) or {}
+    seg = segments[idx] if idx < len(segments) else None
+    seg_cell_children: List[Any] = []
+    if seg and seg.get("url"):
+        seg_cell_children.append(Audio(Source(src=seg["url"], type=seg.get("mime") or "audio/webm"), controls=True))
+        seg_cell_children.append(Space(" "))
+        seg_cell_children.append(A("Download", href=seg["url"], download=True))
+        if isinstance(seg.get("size"), int):
+            kb = int(seg["size"]/1024)
+            seg_cell_children.append(Space(f" ({kb} KB)"))
+    seg_cell = Td(*seg_cell_children)
+    start_cell = Td(("" if not seg else ("" if not seg.get("startMs") else str(_fmt_time(seg["startMs"])))))
+    end_cell = Td(("" if not seg else ("" if not seg.get("endMs") else str(_fmt_time(seg["endMs"])))))
+    svc_cells = []
+    for s in services:
+        arr = transcripts.get(s["key"], []) or []
+        txt = arr[idx] if idx < len(arr) else ""
+        svc_cells.append(Td(txt))
+    return Tr(
+        seg_cell,
+        start_cell,
+        end_cell,
+        *svc_cells,
+        id=f"segrow-{record.get('id','')}-{idx}",
+        hx_post="/render/segment_row",
+        hx_trigger="refresh-row",
+        hx_target="this",
+        hx_swap="outerHTML"
+    )
+
+
+@rt("/render/segment_row", methods=["POST"])
+def render_segment_row(req) -> Any:
+    try:
+        try:
+            data = req.json()
+        except Exception:
+            data = req.form()
+        record_raw = data.get("record", {})
+        record: Dict[str, Any] = record_raw if isinstance(record_raw, dict) else (_json.loads(record_raw) if isinstance(record_raw, str) else {})
+        idx: int = int(data.get("idx", 0))
+    except Exception:
+        return HTMLResponse(status_code=400, content="Bad Request")
+    services = [s for s in services_json() if s.get("enabled")]
+    row = _render_segment_row(record, services, idx)
+    html = str(row)
+    etag = hashlib.sha256(html.encode("utf-8")).hexdigest()
+    inm = req.headers.get("if-none-match") or req.headers.get("hx-etag") or ""
+    if inm == etag:
+        return HTMLResponse(status_code=304, content="")
+    resp = HTMLResponse(content=html)
+    resp.headers["ETag"] = etag
+    resp.headers["HX-ETag"] = etag
+    return resp
+
+
+@rt("/render/full_row", methods=["POST"])
+def render_full_row(req) -> Any:
+    try:
+        try:
+            data = req.json()
+        except Exception:
+            data = req.form()
+        record_raw = data.get("record", {})
+        record: Dict[str, Any] = record_raw if isinstance(record_raw, dict) else (_json.loads(record_raw) if isinstance(record_raw, str) else {})
+    except Exception:
+        return HTMLResponse(status_code=400, content="Bad Request")
+    services = [s for s in services_json() if s.get("enabled")]
+    full_header = Tr(*[Th(s["label"]) for s in services])
+    full_row = Tr(*[Td((record.get("fullAppend", {}) or {}).get(s["key"], "")) for s in services], id=f"fullrow-{record.get('id','')}")
+    table = Table(THead(full_header), TBody(full_row), border="1", cellpadding="4", cellspacing="0", style="border-collapse:collapse; width:100%")
+    html = str(table)
+    etag = hashlib.sha256(html.encode("utf-8")).hexdigest()
+    inm = req.headers.get("if-none-match") or req.headers.get("hx-etag") or ""
+    if inm == etag:
+        return HTMLResponse(status_code=304, content="")
+    resp = HTMLResponse(content=html)
+    resp.headers["ETag"] = etag
+    resp.headers["HX-ETag"] = etag
+    return resp
 
