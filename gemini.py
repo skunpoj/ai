@@ -1,26 +1,12 @@
 from google import genai
 from google.genai import types
 import os
-import tempfile
 from dotenv import load_dotenv
+from utils.credentials import ensure_google_credentials_from_env
 
-# Load .env before reading any credential env vars
+# Load .env and ensure GOOGLE_APPLICATION_CREDENTIALS is set from JSON env
 load_dotenv()
-# --- Credentials Handling (START) ---
-credentials_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-print(credentials_json)
-if credentials_json:
-    try:
-        fd, path = tempfile.mkstemp(suffix=".json")
-        with os.fdopen(fd, 'w') as tmp:
-            tmp.write(credentials_json)
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
-        print(f"Google Cloud credentials written to temporary file: {path}")
-    except Exception as e:
-        print(f"Error writing Google Cloud credentials to temporary file: {e}")
-else:
-    print("GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable not found.")
-# --- Credentials Handling (END) ---
+ensure_google_credentials_from_env()
 
 client = genai.Client(
   vertexai=True, project="da-proof-of-concept", location="global",

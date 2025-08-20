@@ -6,6 +6,7 @@ import time
 
 from google.cloud import speech
 import pyaudio
+from utils.credentials import ensure_google_credentials_from_env
 
 # Audio recording parameters
 STREAMING_LIMIT = 240000  # 4 minutes
@@ -266,6 +267,8 @@ def listen_print_loop(responses: object, stream: object) -> None:
 
 
 def main() -> None:
+    # Ensure GOOGLE_APPLICATION_CREDENTIALS from env JSON if provided
+    ensure_google_credentials_from_env()
     """start bidirectional streaming from microphone input to speech API"""
     client = speech.SpeechClient()
     config = speech.RecognitionConfig(
