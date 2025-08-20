@@ -35,9 +35,9 @@ def build_segment_modal() -> Any:
     provider_checks = Div(
         H3("Providers"),
         Div(
-            Input(type="checkbox", id="svc_google", checked=True), Label("Google STT", _for="svc_google"),
+            Input(type="checkbox", id="svc_google"), Label("Google STT", _for="svc_google"),
             Input(type="checkbox", id="svc_vertex", checked=True), Label("Gemini Vertex", _for="svc_vertex"),
-            Input(type="checkbox", id="svc_gemini", checked=True), Label("Gemini API", _for="svc_gemini"),
+            Input(type="checkbox", id="svc_gemini"), Label("Gemini API", _for="svc_gemini"),
             Input(type="checkbox", id="svc_aws"), Label("AWS (beta)", _for="svc_aws"),
             id="providerCheckboxes", style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px"
         ),
@@ -190,7 +190,7 @@ def render_panel(req) -> Any:
         ),
         Div(H3("Segments"), seg_table, style="margin-top:12px")
     )
-    return panel
+    return HTMLResponse(str(panel))
 
 
 def _fmt_time(ts: Any) -> str:
@@ -221,6 +221,7 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
         arr = transcripts.get(s["key"], []) or []
         txt = arr[idx] if idx < len(arr) else ""
         svc_cells.append(Td(txt))
+    import json as __json
     return Tr(
         seg_cell,
         start_cell,
@@ -230,7 +231,8 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
         hx_post="/render/segment_row",
         hx_trigger="refresh-row",
         hx_target="this",
-        hx_swap="outerHTML"
+        hx_swap="outerHTML",
+        hx_vals=__json.dumps({"record": record, "idx": idx})
     )
 
 
