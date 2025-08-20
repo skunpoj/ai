@@ -245,19 +245,24 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
 
 
 def render_segment_row(req) -> Any:
+    # Parse tolerant: fall back to minimal defaults on any error
     try:
         try:
             data = req.json()
         except Exception:
             data = req.form()
-        record_raw = data.get("record", {})
+        record_raw = (data or {}).get("record", {})
         record: Dict[str, Any] = record_raw if isinstance(record_raw, dict) else (_json.loads(record_raw) if isinstance(record_raw, str) else {})
-        idx: int = int(data.get("idx", 0))
+        idx: int = int((data or {}).get("idx", 0))
     except Exception:
-        return HTMLResponse(status_code=400, content="Bad Request")
-    services = [s for s in services_json() if s.get("enabled")]
-    row = _render_segment_row(record, services, idx)
-    html = str(row)
+        record = {}
+        idx = 0
+    try:
+        services = [s for s in services_json() if s.get("enabled")]
+        row = _render_segment_row(record, services, idx)
+        html = str(row)
+    except Exception:
+        html = "<tr></tr>"
     etag = hashlib.sha256(html.encode("utf-8")).hexdigest()
     inm = req.headers.get("if-none-match") or req.headers.get("hx-etag") or ""
     if inm == etag:
@@ -269,20 +274,24 @@ def render_segment_row(req) -> Any:
 
 
 def render_full_row(req) -> Any:
+    # Parse tolerant: fall back to minimal defaults on any error
     try:
         try:
             data = req.json()
         except Exception:
             data = req.form()
-        record_raw = data.get("record", {})
+        record_raw = (data or {}).get("record", {})
         record: Dict[str, Any] = record_raw if isinstance(record_raw, dict) else (_json.loads(record_raw) if isinstance(record_raw, str) else {})
     except Exception:
-        return HTMLResponse(status_code=400, content="Bad Request")
-    services = [s for s in services_json() if s.get("enabled")]
-    full_header = Tr(*[Th(s["label"]) for s in services])
-    full_row = Tr(*[Td((record.get("fullAppend", {}) or {}).get(s["key"], "")) for s in services], id=f"fullrow-{record.get('id','')}")
-    table = Table(THead(full_header), TBody(full_row), border="1", cellpadding="4", cellspacing="0", style="border-collapse:collapse; width:100%")
-    html = str(table)
+        record = {}
+    try:
+        services = [s for s in services_json() if s.get("enabled")]
+        full_header = Tr(*[Th(s["label"]) for s in services])
+        full_row = Tr(*[Td(((record.get("fullAppend", {}) or {}).get(s["key"], ""))) for s in services], id=f"fullrow-{record.get('id','')}")
+        table = Table(THead(full_header), TBody(full_row), border="1", cellpadding="4", cellspacing="0", style="border-collapse:collapse; width:100%")
+        html = str(table)
+    except Exception:
+        html = "<table></table>"
     etag = hashlib.sha256(html.encode("utf-8")).hexdigest()
     inm = req.headers.get("if-none-match") or req.headers.get("hx-etag") or ""
     if inm == etag:
