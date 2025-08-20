@@ -1,3 +1,8 @@
+// main.js is loaded as type="module" from app.py
+import { SERVICES } from '/static/ui/services.js';
+import { bytesToLabel } from '/static/ui/format.js';
+import { ensureTab as ensureUITab, activateTab as activateUITab } from '/static/ui/tabs.js';
+
 document.addEventListener('DOMContentLoaded', () => {
     let mediaRecorder; // Continuous full recorder
     let audioChunks = [];
@@ -26,8 +31,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const transcriptionElement = document.getElementById('transcription');
     const liveTranscriptContainer = document.getElementById('liveTranscriptContainer');
     const recordingsContainer = document.getElementById('recordingsContainer');
-    const fullContainer = document.getElementById('fullContainer') || recordingsContainer;
-    const segmentContainer = document.getElementById('segmentContainer') || recordingsContainer;
+    const tabsBar = document.getElementById('recordTabs');
+    const panelsHost = document.getElementById('recordPanels');
     const chunkContainer = null; // Removed redundant chunk UI
     const toggleGoogleSpeechCheckbox = document.getElementById('toggleGoogleSpeech');
     const segmentLenGroup = document.getElementById('segmentLenGroup');
@@ -103,9 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
         startTranscribeButton.disabled = false; // allow transcribe only during recording
         stopTranscribeButton.disabled = true;
         transcriptionElement.innerText = "Transcription: ";
-        // Do NOT clear previous full recordings; keep history visible
-        // Keep existing full recordings visible; only clear segments UI for the new session
-        if (segmentContainer) segmentContainer.innerHTML = '';
+        // Do NOT clear previous recordings; new recording gets its own tab
         if (chunkContainer) chunkContainer.innerHTML = '';
         if (liveTranscriptContainer) liveTranscriptContainer.innerHTML = '';
 
@@ -114,17 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Transcription control is via buttons; default off at start
         enableGoogleSpeech = false;
         recordStartTs = Date.now();
-        // Pre-create current recording to avoid losing it if 'ready' arrives late
-        currentRecording = {
-            audioUrl: null,
-            serverUrl: null,
-            startTs: recordStartTs,
-            stopTs: null,
-            durationMs: null,
-            transcripts: { google: [], googleLive: [], vertex: [], gemini: [] }
-        };
-        recordings.push(currentRecording);
-        try { displayRecordings(); } catch(_) {}
+        currentRecording = null; // will be created on backend 'ready'
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1, sampleRate: 48000 } });
@@ -219,20 +212,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     // Initialize and register current recording for this session
                     currentRecording = {
+                        id: `rec-${Date.now()}`,
                         audioUrl: null,
                         serverUrl: null,
+                        serverSizeBytes: null,
+                        clientSizeBytes: null,
                         startTs: recordStartTs,
                         stopTs: null,
                         durationMs: null,
+                        segments: [], // {idx, url, mime, size, ts, startMs?, endMs?}
                         transcripts: {
+                            // per-segment arrays aligned by idx
                             google: [],
                             googleLive: [],
                             vertex: [],
                             gemini: []
+                        },
+                        fullAppend: { // incremental appended text per service
+                            googleLive: '',
+                            google: '',
+                            vertex: '',
+                            gemini: ''
                         }
                     };
                     recordings.push(currentRecording);
-                    displayRecordings();
+                    ensureRecordingTab(currentRecording);
+                    renderRecordingPanel(currentRecording);
                 } else if (data.transcript && typeof data.is_final !== 'undefined') {
                     // Live Google streaming transcript (append-only)
                     const line = document.createElement('div');
@@ -241,81 +246,64 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (liveTranscriptContainer) liveTranscriptContainer.appendChild(line);
                     if (currentRecording && data.is_final) {
                         currentRecording.transcripts.googleLive.push(data.transcript);
-                        displayRecordings();
+                        currentRecording.fullAppend.googleLive = `${currentRecording.fullAppend.googleLive}${currentRecording.fullAppend.googleLive ? ' ' : ''}${data.transcript}`;
+                        renderRecordingPanel(currentRecording);
                     }
                 } else if (data.type === 'chunk_saved' || data.type === 'chunk_transcript') {
                     // Ignore chunk UI updates; chunks are internal
                 } else if (data.type === 'segment_saved') {
                     // Render single server-hosted playable audio per segment
-                    let segList = document.getElementById('segmentList');
-                    if (!segList) {
-                        segList = document.createElement('div');
-                        segList.id = 'segmentList';
-                        (segmentContainer || recordingsContainer).appendChild(segList);
-                    }
-                    const idx = typeof data.id === 'number' ? data.id : data.idx;
-                    const existing = document.getElementById(`segment-${idx}`);
-                    const when = (typeof data.ts === 'number') ? new Date(data.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
+                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
                     const mime = (typeof data.mime === 'string' && data.mime) ? data.mime : (String(data.url).endsWith('.ogg') ? 'audio/ogg' : 'audio/webm');
-                    const sizeTxt = (typeof data.size === 'number') ? ` (${(data.size/1024).toFixed(0)} KB)` : '';
-                    const html = `Segment ${idx + 1} — ${when}: <audio controls id="segment-audio-${idx}"><source src="${data.url}" type="${mime}"></audio> <a href="${data.url}" download>Download</a>${sizeTxt}
-                    <div id="segment-tx-list-${idx}" class="tx-list"></div>`;
-                    if (existing) existing.innerHTML = html; else {
-                        const segDiv = document.createElement('div');
-                        segDiv.id = `segment-${idx}`;
-                        segDiv.innerHTML = html;
-                        segList.appendChild(segDiv);
-                    }
-                    const audioEl = document.getElementById(`segment-audio-${idx}`);
-                    try { if (audioEl) audioEl.load(); } catch(_) {}
-                    // Show a status row
-                    const list = document.getElementById(`segment-tx-list-${idx}`);
-                    if (list) {
-                        const row = document.createElement('div');
-                        row.textContent = '[Status] uploaded';
-                        list.appendChild(row);
+                    if (currentRecording) {
+                        while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
+                        const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
+                        const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
+                        currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime, size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
+                        renderRecordingPanel(currentRecording);
                     }
                 } else if (data.type === 'segment_transcript' || data.type === 'segment_transcript_google') {
-                    const idx = typeof data.id === 'number' ? data.id : data.idx;
-                    const key = `google:${idx}:${data.transcript || ''}`;
+                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                    const key = `google:${segIndex}:${data.transcript || ''}`;
                     if (seenTxKeys.has(key)) return;
                     seenTxKeys.add(key);
-                    const list = document.getElementById(`segment-tx-list-${idx}`);
-                    if (list) {
-                        const row = document.createElement('div');
-                        row.textContent = data.transcript ? `Google STT: ${data.transcript}` : 'Google STT: (no text)';
-                        list.appendChild(row);
+                    if (currentRecording) {
+                        while (currentRecording.transcripts.google.length <= segIndex) currentRecording.transcripts.google.push('');
+                        currentRecording.transcripts.google[segIndex] = data.transcript || '';
+                        if (data.transcript) currentRecording.fullAppend.google = `${currentRecording.fullAppend.google}${currentRecording.fullAppend.google ? ' ' : ''}${data.transcript}`.trim();
+                        renderRecordingPanel(currentRecording);
                     }
-                    if (currentRecording) { currentRecording.transcripts.google.push(data.transcript || ''); displayRecordings(); }
                 } else if (data.type === 'segment_transcript_vertex') {
-                    const idx = typeof data.id === 'number' ? data.id : data.idx;
-                    const key = `vertex:${idx}:${data.transcript || ''}`;
+                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                    const key = `vertex:${segIndex}:${data.transcript || ''}`;
                     if (seenTxKeys.has(key)) return;
                     seenTxKeys.add(key);
-                    const list = document.getElementById(`segment-tx-list-${idx}`);
-                    if (list) {
-                        const row = document.createElement('div');
-                        row.textContent = data.transcript ? `Gemini (Vertex AI): ${data.transcript}` : 'Gemini (Vertex AI): (no text)';
-                        list.appendChild(row);
+                    if (currentRecording) {
+                        while (currentRecording.transcripts.vertex.length <= segIndex) currentRecording.transcripts.vertex.push('');
+                        currentRecording.transcripts.vertex[segIndex] = data.transcript || '';
+                        if (data.transcript) currentRecording.fullAppend.vertex = `${currentRecording.fullAppend.vertex}${currentRecording.fullAppend.vertex ? ' ' : ''}${data.transcript}`.trim();
+                        renderRecordingPanel(currentRecording);
                     }
-                    if (currentRecording) { currentRecording.transcripts.vertex.push(data.transcript || ''); displayRecordings(); }
                 } else if (data.type === 'segment_transcript_gemini') {
-                    const idx = typeof data.id === 'number' ? data.id : data.idx;
-                    const key = `gemini:${idx}:${data.transcript || ''}`;
+                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                    const key = `gemini:${segIndex}:${data.transcript || ''}`;
                     if (seenTxKeys.has(key)) return;
                     seenTxKeys.add(key);
-                    const list = document.getElementById(`segment-tx-list-${idx}`);
-                    if (list) {
-                        const row = document.createElement('div');
-                        row.textContent = data.transcript ? `Gemini (API): ${data.transcript}` : 'Gemini (API): (no text)';
-                        list.appendChild(row);
+                    if (currentRecording) {
+                        while (currentRecording.transcripts.gemini.length <= segIndex) currentRecording.transcripts.gemini.push('');
+                        currentRecording.transcripts.gemini[segIndex] = data.transcript || '';
+                        if (data.transcript) currentRecording.fullAppend.gemini = `${currentRecording.fullAppend.gemini}${currentRecording.fullAppend.gemini ? ' ' : ''}${data.transcript}`.trim();
+                        renderRecordingPanel(currentRecording);
                     }
-                    if (currentRecording) { currentRecording.transcripts.gemini.push(data.transcript || ''); displayRecordings(); }
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
                     const savedUrl = data.url;
                     console.log('Frontend: Server saved recording at:', savedUrl);
-                    if (currentRecording) { currentRecording.serverUrl = savedUrl; displayRecordings(); }
+                    if (currentRecording) {
+                        currentRecording.serverUrl = savedUrl;
+                        if (typeof data.size === 'number') currentRecording.serverSizeBytes = data.size;
+                        renderRecordingPanel(currentRecording);
+                    }
                     if (savedCloseTimer) {
                         clearTimeout(savedCloseTimer);
                         savedCloseTimer = null;
@@ -380,16 +368,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     segmentRecorder.onstop = async () => {
                         if (segBlob && segBlob.size) {
                             console.log('Frontend: Segment available:', segBlob.size, 'bytes');
-                            let segList = document.getElementById('segmentList');
-                            if (!segList) {
-                                segList = document.createElement('div');
-                                segList.id = 'segmentList';
-                                (segmentContainer || recordingsContainer).appendChild(segList);
-                            }
-                            const entry = document.createElement('div');
-                            entry.id = `segment-${ts}`;
-                            entry.textContent = `${new Date(ts).toLocaleTimeString()} — uploading...`;
-                            segList.appendChild(entry);
+                            // UI for segments handled in renderRecordingPanel upon server echo
                             try {
                                 if (socket.readyState === WebSocket.OPEN) {
                                     const arrayBuffer = await segBlob.arrayBuffer();
@@ -437,7 +416,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     currentRecording.clientSizeBytes = audioBlob.size;
                     console.log('Frontend: Updated current recording with audioUrl:', currentRecording);
                 }
-                displayRecordings(); // Display recordings with the new audio player
+                if (currentRecording) renderRecordingPanel(currentRecording);
                 currentRecording = null; // Reset for next session (recordings array keeps history)
             };
         } catch (err) {
@@ -500,35 +479,88 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    function displayRecordings() {
-        console.log('Frontend: Displaying recordings. Current recordings array:', recordings);
-        if (fullContainer) fullContainer.innerHTML = '';
+    function ensureRecordingTab(record) { if (!tabsBar || !panelsHost) return; ensureUITab(tabsBar, panelsHost, record); }
+    function activateTab(recordId) { if (!tabsBar || !panelsHost) return; activateUITab(tabsBar, panelsHost, recordId); }
 
-        recordings.forEach((record, index) => {
-            const recordDiv = document.createElement('div');
-            recordDiv.className = 'recording-item';
-            const startedAt = record.startTs ? new Date(record.startTs).toLocaleTimeString() : '';
-            const endedAt = record.stopTs ? new Date(record.stopTs).toLocaleTimeString() : '';
-            const dur = record.durationMs ? Math.round(record.durationMs / 1000) : 0;
-            const playerAndDownload = `${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''} ${record.serverUrl ? `<a href="${record.serverUrl}" download>Download</a>` : ''}`;
-            const googleText = (record.transcripts && record.transcripts.google) ? record.transcripts.google.join(' ') : '';
-            const googleLiveText = (record.transcripts && record.transcripts.googleLive) ? record.transcripts.googleLive.join(' ') : '';
-            const vertexText = (record.transcripts && record.transcripts.vertex) ? record.transcripts.vertex.join(' ') : '';
-            const geminiText = (record.transcripts && record.transcripts.gemini) ? record.transcripts.gemini.join(' ') : '';
-            recordDiv.innerHTML = `
-                <h3>Recording ${index + 1}</h3>
-                <div>${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}</div>
-                <div>${playerAndDownload}</div>
-                <div style="margin-top:6px">
-                    ${googleLiveText ? `<div>Google Live: ${googleLiveText}</div>` : ''}
-                    ${googleText ? `<div>Google STT: ${googleText}</div>` : ''}
-                    ${vertexText ? `<div>Gemini (Vertex AI): ${vertexText}</div>` : ''}
-                    ${geminiText ? `<div>Gemini (API): ${geminiText}</div>` : ''}
-                </div>
-                <hr/>
+    function renderRecordingPanel(record) {
+        ensureRecordingTab(record);
+        const panel = document.getElementById(`panel-${record.id}`);
+        if (!panel) return;
+        const startedAt = record.startTs ? new Date(record.startTs).toLocaleTimeString() : '';
+        const endedAt = record.stopTs ? new Date(record.stopTs).toLocaleTimeString() : '';
+        const dur = record.durationMs ? Math.round(record.durationMs / 1000) : 0;
+        const sizeLabel = (typeof record.serverSizeBytes === 'number' && record.serverSizeBytes > 0)
+            ? bytesToLabel(record.serverSizeBytes)
+            : (typeof record.clientSizeBytes === 'number' ? bytesToLabel(record.clientSizeBytes) : '');
+        const playerAndDownload = `${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''} ${record.serverUrl ? `<a href="${record.serverUrl}" download>Download</a>` : ''} ${sizeLabel ? `(${sizeLabel})` : ''}`;
+
+        // Build services dynamically; initial fixed services list
+        const services = SERVICES;
+
+        // Segments grid: left-most three columns for segment info (audio, start, end), then one column per service
+        let segRowsHtml = '';
+        const maxSeg = Math.max(
+            record.segments.length,
+            record.transcripts.google.length,
+            record.transcripts.vertex.length,
+            record.transcripts.gemini.length
+        );
+        for (let i = 0; i < maxSeg; i++) {
+            const seg = record.segments[i];
+            const leftCells = `
+                <td>${seg ? `<audio controls src="${seg.url}"></audio>` : ''} ${seg && seg.url ? `<a href="${seg.url}" download>Download</a>` : ''} ${seg && seg.size ? `(${bytesToLabel(seg.size)})` : ''}</td>
+                <td>${seg && seg.startMs ? new Date(seg.startMs).toLocaleTimeString() : ''}</td>
+                <td>${seg && seg.endMs ? new Date(seg.endMs).toLocaleTimeString() : ''}</td>
             `;
-            (fullContainer || recordingsContainer).appendChild(recordDiv);
-        });
+            const svcCells = services.map(svc => `<td>${(record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : ''}</td>`).join('');
+            segRowsHtml += `<tr>${leftCells}${svcCells}</tr>`;
+        }
+
+        // Full record comparison rows: one cell per service, with incremental appended text
+        const fullCells = services.map(svc => `<td>${record.fullAppend[svc.key] || ''}</td>`).join('');
+        const fullLiveCell = `<td>${record.fullAppend.googleLive || ''}</td>`;
+
+        panel.innerHTML = `
+            <div style="margin-bottom:8px">
+                ${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}
+            </div>
+            <div style="margin-bottom:8px">${playerAndDownload}</div>
+            <div>
+                <h3>Full Record</h3>
+                <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse; width:100%">
+                    <thead>
+                        <tr>
+                            ${services.map(s => `<th>${s.label}</th>`).join('')}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>${fullCells}</tr>
+                    </tbody>
+                </table>
+                <div style="margin-top:6px; font-size:12px; color:#aaa">Live (finalized) Google stream: ${record.fullAppend.googleLive || ''}</div>
+            </div>
+            <div style="margin-top:12px">
+                <h3>Segments</h3>
+                <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse; width:100%">
+                    <thead>
+                        <tr>
+                            <th>Segment</th>
+                            <th>Start</th>
+                            <th>End</th>
+                            ${services.map(s => `<th>${s.label}</th>`).join('')}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${segRowsHtml}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    function displayRecordings() {
+        // Kept for compatibility if other code calls it; re-render active panel if any currentRecording
+        if (currentRecording) renderRecordingPanel(currentRecording);
     }
 
     console.log('Frontend: DOMContentLoaded - Ready for interaction.');
