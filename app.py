@@ -19,7 +19,7 @@ if str(_ROOT) not in sys.path:
 from utils.credentials import ensure_google_credentials_from_env
 from server.config import CHUNK_MS, SEGMENT_MS_DEFAULT
 from server.state import app_state
-from server.routes import build_index
+from server.routes import build_index, render_panel, render_segment_row, render_full_row
 from server.ws import ws_handler
 from server.services.registry import list_services as registry_list, set_service_enabled
 from typing import Any, List, Dict
@@ -90,6 +90,19 @@ async def ws_test(websocket: WebSocket):
         await ws_handler(websocket)
     except Exception as e:
         print(f"Error in ws_handler: {e}")
+
+# Register HTMX partial endpoints here to avoid decorator dependency on 'rt' in server.routes
+@rt("/render/panel", methods=["POST"])
+def render_panel_route(req: Any) -> Any:
+    return render_panel(req)
+
+@rt("/render/segment_row", methods=["POST"])
+def render_segment_row_route(req: Any) -> Any:
+    return render_segment_row(req)
+
+@rt("/render/full_row", methods=["POST"])
+def render_full_row_route(req: Any) -> Any:
+    return render_full_row(req)
 
 serve()
 
