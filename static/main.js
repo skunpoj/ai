@@ -27,8 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastChunkBlob = null; // unused in timeslice mode
     let segmentStartTs = null; // unused in timeslice mode
     let segmentRotate = false; // when true, onstop restarts recorder with new timeslice
-    // ETag caches for conditional fragment refreshes
-    const etagCache = { full: new Map(), rows: new Map() }; // maps by recordId -> etag / idx->etag
+    // Removed client-side ETag caches; htmx triggers drive updates declaratively
 
     const startRecordingButton = document.getElementById('startRecording');
     const stopRecordingButton = document.getElementById('stopRecording');
@@ -204,19 +203,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
             try { await audioCtx.audioWorklet.addModule('/static/audio/pcm-worklet.js'); } catch (e) { console.warn('Frontend: failed to add worklet, falling back', e); }
             if (audioCtx.audioWorklet) {
-                const source = audioCtx.createMediaStreamSource(stream);
+            const source = audioCtx.createMediaStreamSource(stream);
                 const workletNode = new AudioWorkletNode(audioCtx, 'pcm16-worklet', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
                 workletNode.port.onmessage = ev => {
-                    if (!enableGoogleSpeech || !socket || socket.readyState !== WebSocket.OPEN) return;
+                if (!enableGoogleSpeech || !socket || socket.readyState !== WebSocket.OPEN) return;
                     const bytes = new Uint8Array(ev.data);
-                    let bin = '';
-                    const chunk = 0x8000;
-                    for (let i = 0; i < bytes.length; i += chunk) {
-                        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-                    }
-                    const b64 = btoa(bin);
-                    try { socket.send(JSON.stringify({ pcm16: b64 })); } catch (_) {}
-                };
+                let bin = '';
+                const chunk = 0x8000;
+                for (let i = 0; i < bytes.length; i += chunk) {
+                    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                }
+                const b64 = btoa(bin);
+                try { socket.send(JSON.stringify({ pcm16: b64 })); } catch (_) {}
+            };
                 source.connect(workletNode);
                 workletNode.connect(audioCtx.destination);
             }
@@ -573,7 +572,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const panelId = `panel-${record.id}`;
         htmx.ajax('POST', '/render/panel', { target: `#${panelId}`, values: { record: JSON.stringify(record) }, swap: 'innerHTML' });
         // After panel render, trigger initial full and rows refresh via htmx triggers
-        htmx.trigger(`#fulltable-${record.id}`, 'refresh-full', { headers: { 'HX-ETag': etagCache.full.get(record.id) || '' }, detail: { record: JSON.stringify(record) } });
+        htmx.trigger(`#fulltable-${record.id}`, 'refresh-full', { detail: { record: JSON.stringify(record) } });
         const maxSeg = Math.max(
             record.segments.length,
             record.transcripts.google.length,
@@ -582,16 +581,15 @@ document.addEventListener('DOMContentLoaded', () => {
             (record.transcripts.aws || []).length
         );
         for (let i = 0; i < maxSeg; i++) {
-            htmx.trigger(`#segrow-${record.id}-${i}`, 'refresh-row', { headers: { 'HX-ETag': (etagCache.rows.get(record.id) || new Map()).get(i) || '' }, detail: { record: JSON.stringify(record), idx: i } });
+            htmx.trigger(`#segrow-${record.id}-${i}`, 'refresh-row', { detail: { record: JSON.stringify(record), idx: i } });
         }
     }
 
     async function refreshFullRow(record) {
         const table = document.getElementById(`fulltable-${record.id}`);
         if (!table) return;
-        const prev = etagCache.full.get(record.id) || '';
         // Trigger htmx update via the element's declared hx-* attributes
-        htmx.trigger(`#fulltable-${record.id}`, 'refresh-full', { headers: { 'HX-ETag': prev }, detail: { record: JSON.stringify(record) } });
+        htmx.trigger(`#fulltable-${record.id}`, 'refresh-full', { detail: { record: JSON.stringify(record) } });
     }
 
     async function refreshSegmentRows(record) {
@@ -611,11 +609,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const rowId = `segrow-${record.id}-${idx}`;
         const rowEl = document.getElementById(rowId);
         if (!rowEl) return;
-        if (!etagCache.rows.has(record.id)) etagCache.rows.set(record.id, new Map());
-        const rowMap = etagCache.rows.get(record.id);
-        const prev = rowMap.get(idx) || '';
         // Trigger htmx update per row using the row's hx-* attributes
-        htmx.trigger(`#${rowId}`, 'refresh-row', { headers: { 'HX-ETag': prev }, detail: { record: JSON.stringify(record), idx } });
+        htmx.trigger(`#${rowId}`, 'refresh-row', { detail: { record: JSON.stringify(record), idx } });
     }
 
     function displayRecordings() {
