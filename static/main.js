@@ -576,17 +576,8 @@ document.addEventListener('DOMContentLoaded', () => {
     async function renderRecordingPanel(record) {
         ensureRecordingTab(record);
         const panelId = `panel-${record.id}`;
-        htmx.ajax('POST', '/render/panel', { target: `#${panelId}`, values: { record: JSON.stringify(record) }, swap: 'innerHTML' });
-        // Fallback: if server-render failed (e.g., 4xx) and panel is still empty, render client-side
-        setTimeout(() => {
-            const host = document.getElementById(panelId);
-            if (host && (!host.innerHTML || host.innerHTML.trim() === '')) {
-                try {
-                    const html = renderPanel(record);
-                    if (typeof html === 'string') host.innerHTML = html;
-                } catch (_) {}
-            }
-        }, 150);
+        // Render client-side to avoid initial server 400, but keep hx-enabled fragments for subsequent server updates
+        try { await renderPanel(record); } catch (_) {}
         // After panel render, trigger initial full and rows refresh via htmx triggers, but only once nodes exist
         setTimeout(() => {
             const fullEl = document.getElementById(`fulltable-${record.id}`);
@@ -608,8 +599,8 @@ document.addEventListener('DOMContentLoaded', () => {
     async function refreshFullRow(record) {
         const table = document.getElementById(`fulltable-${record.id}`);
         if (!table) return;
-        // Trigger htmx update via the element's declared hx-* attributes
-        htmx.trigger(`#fulltable-${record.id}`, 'refresh-full', { detail: { record: JSON.stringify(record) } });
+        // Post fresh values so server renders current snapshot
+        htmx.ajax('POST', '/render/full_row', { target: table, values: { record: JSON.stringify(record) }, swap: 'innerHTML' });
     }
 
     async function refreshSegmentRows(record) {
@@ -628,9 +619,14 @@ document.addEventListener('DOMContentLoaded', () => {
     async function refreshSegmentRow(record, idx) {
         const rowId = `segrow-${record.id}-${idx}`;
         const rowEl = document.getElementById(rowId);
-        if (!rowEl) return;
-        // Trigger htmx update per row using the row's hx-* attributes
-        htmx.trigger(`#${rowId}`, 'refresh-row', { detail: { record: JSON.stringify(record), idx } });
+        if (!rowEl) {
+            // Create rows by re-rendering panel once, then attempt swap
+            await renderRecordingPanel(record);
+        }
+        const target = document.getElementById(rowId);
+        if (!target) return;
+        // Post fresh values so server renders current snapshot
+        htmx.ajax('POST', '/render/segment_row', { target, values: { record: JSON.stringify(record), idx }, swap: 'outerHTML' });
     }
 
     function displayRecordings() {
