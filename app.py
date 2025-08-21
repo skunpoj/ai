@@ -23,7 +23,8 @@ from server.routes import build_index, render_panel, render_segment_row, render_
 from server.ws import ws_handler
 from server.services.registry import list_services as registry_list, set_service_enabled
 from typing import Any, List, Dict
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, HTMLResponse
+import json
 
 # --- Credentials Handling (START) ---
 cred = ensure_google_credentials_from_env()
