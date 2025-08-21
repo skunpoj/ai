@@ -25,11 +25,11 @@ def build_settings_modal() -> Any:
         Input(type="radio", name="segmentLen", id="seg180", value="180000"), Label("180", _for="seg180"),
         Input(type="radio", name="segmentLen", id="seg300", value="300000"), Label("300", _for="seg300"),
     )
-    len_group = Div(first_row, second_row, id="segmentLenGroup")
+    len_group = Div(H5("Intervals"),first_row, second_row, id="segmentLenGroup")
 
     provider_checks = Div(
-        H5("Providers"),
         Div(
+            H5("Providers"),
             Div(
                 Input(type="checkbox", id="svc_aws"),
                 Label("AWS (beta)", _for="svc_aws", id="lbl_aws", style="cursor:pointer"),
@@ -85,7 +85,6 @@ def build_settings_modal() -> Any:
     )
 
     content = Div(
-        H5("Intervals"),
         len_group,
         provider_checks,
         Div(Button("OK", id="okSegmentModal"), style="text-align:center;margin-top:8px"),
