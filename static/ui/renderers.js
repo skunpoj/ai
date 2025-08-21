@@ -29,7 +29,8 @@ export async function renderRecordingPanel(record) {
     ? bytesToLabel(record.serverSizeBytes)
     : (typeof record.clientSizeBytes === 'number' ? bytesToLabel(record.clientSizeBytes) : '');
   const srcUrl = record.serverUrl || record.audioUrl || '';
-  const playerAndDownload = `${srcUrl ? `<audio controls src="${srcUrl}"></audio>` : ''} ${sizeLabel ? `(${sizeLabel})` : ''}`;
+  const mime = srcUrl.toLowerCase().endsWith('.ogg') ? 'audio/ogg' : 'audio/webm';
+  const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${sizeLabel ? `(${sizeLabel})` : ''}`;
 
   // Fetch current services dynamically from backend
   const services = (await getServices()).filter(s => !!s.enabled);
@@ -41,14 +42,15 @@ export async function renderRecordingPanel(record) {
   presentIdx.sort((a, b) => b - a);
   for (const i of presentIdx) {
     const seg = record.segments[i];
+    const segMime = (seg && seg.url && seg.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
     const leftCells = `
-      <td>${seg && seg.url ? `<audio controls src="${seg.url}"></audio>` : ''} ${seg && seg.size ? `(${bytesToLabel(seg.size)})` : ''}</td>
+      <td>${seg && seg.url ? `<audio controls><source src="${seg.url}" type="${segMime}"></audio>` : ''} ${seg && seg.size ? `(${bytesToLabel(seg.size)})` : ''}</td>
       <td>${seg && seg.startMs ? formatElapsed(seg.startMs - (record.startTs || seg.startMs)) : ''}</td>
       <td>${seg && seg.endMs ? formatElapsed(seg.endMs - (record.startTs || seg.endMs)) : ''}</td>
     `;
     const svcCells = services.map(svc => {
       const val = (record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : '';
-      let display = val ? val : 'transcribing…';
+      let display = val ? val : '';
       const timeouts = (record.timeouts && record.timeouts[svc.key]) || [];
       if (!val && i < timeouts.length && timeouts[i]) display = 'no result (timeout)';
       return `<td data-svc="${svc.key}">${display}</td>`;
