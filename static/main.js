@@ -149,7 +149,7 @@ document.addEventListener('DOMContentLoaded', () => {
         stopRecordingButton.disabled = false;
         startTranscribeButton.disabled = false; // allow transcribe only during recording
         stopTranscribeButton.disabled = true;
-        transcriptionElement.innerText = "";
+        if (transcriptionElement) transcriptionElement.innerText = "";
         // Do NOT clear previous recordings; new recording gets its own tab
         if (chunkContainer) chunkContainer.innerHTML = '';
         if (liveTranscriptContainer) liveTranscriptContainer.innerHTML = '';
