@@ -168,7 +168,7 @@ async def sse_events() -> Any:
     return StreamingResponse(sse_stream(), media_type="text/event-stream")
 
 @rt("/test_transcribe", methods=["POST"])
-async def test_transcribe(audio_b64: str = "", mime: str = "") -> Any:
+async def test_transcribe(audio_b64: str = "", mime: str = "", services: str = "") -> Any:
     from starlette.responses import JSONResponse
     try:
         raw = _b64_to_bytes(audio_b64)
@@ -176,6 +176,8 @@ async def test_transcribe(audio_b64: str = "", mime: str = "") -> Any:
             return JSONResponse({"ok": False, "error": "no_audio"})
         # very small helper to invoke enabled providers synchronously for a short clip
         results = {}
+        # Optional filter: comma-separated keys e.g., "google,gemini"
+        requested = set([s.strip() for s in (services or "").split(",") if s.strip()])
         try:
             from server.services.registry import is_enabled as svc_enabled
             from server.state import app_state
@@ -184,13 +186,13 @@ async def test_transcribe(audio_b64: str = "", mime: str = "") -> Any:
             from server.services.vertex_langchain import is_available as lc_vertex_available, transcribe_segment_via_langchain
             from server.services.gemini_api import extract_text_from_gemini_response
             # Google
-            if svc_enabled("google") and app_state.speech_client is not None:
+            if ((not requested) or ("google" in requested)) and svc_enabled("google") and app_state.speech_client is not None:
                 try:
                     results["google"] = await recognize_google_segment(app_state.speech_client, raw, ("ogg" if "ogg" in (mime or "").lower() else "webm"))
                 except Exception as e:
                     results["google_error"] = str(e)
             # Vertex
-            if svc_enabled("vertex") and app_state.vertex_client is not None:
+            if ((not requested) or ("vertex" in requested)) and svc_enabled("vertex") and app_state.vertex_client is not None:
                 try:
                     order = ["audio/ogg", "audio/webm"] if ("ogg" in (mime or "").lower()) else ["audio/webm", "audio/ogg"]
                     text = ""
@@ -214,7 +216,7 @@ async def test_transcribe(audio_b64: str = "", mime: str = "") -> Any:
                 except Exception as e:
                     results["vertex_error"] = str(e)
             # Gemini API
-            if svc_enabled("gemini") and app_state.gemini_model is not None:
+            if ((not requested) or ("gemini" in requested)) and svc_enabled("gemini") and app_state.gemini_model is not None:
                 try:
                     order = ["audio/ogg", "audio/webm"] if ("ogg" in (mime or "").lower()) else ["audio/webm", "audio/ogg"]
                     resp = None
