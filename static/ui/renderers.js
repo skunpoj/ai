@@ -40,6 +40,7 @@ export async function renderRecordingPanel(record) {
   );
   for (let i = 0; i < maxSeg; i++) {
     const seg = record.segments[i];
+    if (!seg) continue; // avoid segrow--n placeholders
     const leftCells = `
       <td>${seg ? `<audio controls src="${seg.url}"></audio>` : ''} ${seg && seg.url ? `<a href="${seg.url}" download>Download</a>` : ''} ${seg && seg.size ? `(${bytesToLabel(seg.size)})` : ''}</td>
       <td>${seg && seg.startMs ? new Date(seg.startMs).toLocaleTimeString() : ''}</td>
@@ -60,7 +61,7 @@ export async function renderRecordingPanel(record) {
     </div>
     <div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div>
     <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
-      <h3>Full Record</h3>
+      <h3>Full Record <span id="fullstatus-${record.id}" style="font-weight:normal;color:#888;margin-left:8px">Transcribing…</span></h3>
       <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse; width:100%">
         <thead>
           <tr>
@@ -71,7 +72,7 @@ export async function renderRecordingPanel(record) {
           <tr>${fullCells}</tr>
         </tbody>
       </table>
-      <div style="margin-top:6px; font-size:12px; color:#aaa">Live (finalized) Google stream: ${record.fullAppend.googleLive || ''}</div>
+      
     </div>
     <div style="margin-top:12px">
       <h3>Segments</h3>

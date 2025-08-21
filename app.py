@@ -89,7 +89,7 @@ async def ws_test(websocket: WebSocket):
     print("Backend: ENTERED /ws_stream function (audio streaming).") # CRITICAL TEST LOG
     try:
         await ws_handler(websocket)
-    except Exception as e:
+                except Exception as e:
         print(f"Error in ws_handler: {e}")
 
 # Register HTMX partial endpoints here to avoid decorator dependency on 'rt' in server.routes
@@ -101,20 +101,20 @@ def render_panel_route(req: Any) -> Any:
 def render_segment_row_route(record: str = '', idx: int = 0) -> Any:
     try:
         rec = record if isinstance(record, dict) else (json.loads(record) if isinstance(record, str) and record else {})
-    except Exception:
+                    except Exception:
         rec = {}
     try:
         services = [s for s in registry_list() if s.get("enabled")]
         row = _render_segment_row(rec, services, int(idx) if idx is not None else 0)
         return HTMLResponse(str(row))
-    except Exception:
+                        except Exception:
         return HTMLResponse("<tr></tr>")
 
 @rt("/render/full_row", methods=["GET","POST"])
 def render_full_row_route(record: str = '') -> Any:
     try:
         rec = record if isinstance(record, dict) else (json.loads(record) if isinstance(record, str) and record else {})
-    except Exception:
+                        except Exception:
         rec = {}
     try:
         services = [s for s in registry_list() if s.get("enabled")]

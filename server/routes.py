@@ -75,7 +75,7 @@ def build_index():
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
             ),
-            P("Transcription: ", id="transcription"),
+            # Removed redundant transcription status line
             Div(id="liveTranscriptContainer"),
             build_segment_modal(),
             Div(
@@ -169,11 +169,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     panel = Div(
         hdr,
         player_div,
-        Div(
-            H3("Full Record"),
-            full_table,
-            Div("Live (finalized) Google stream: " + (record.get("fullAppend", {}).get("googleLive", "") or ""), style="margin-top:6px;font-size:12px;color:#aaa")
-        ),
+        Div(H3("Full Record"), full_table),
         Div(H3("Segments"), seg_table, style="margin-top:12px")
     )
     return str(panel)
