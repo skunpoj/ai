@@ -213,7 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const services = await getServicesCached();
             const enabled = services.filter(s => s.enabled);
-            const TIMEOUT_MS = 30000;
+            const TIMEOUT_MS = Number(segmentMs) && Number(segmentMs) >= 1000 ? Number(segmentMs) + 500 : 30000;
             enabled.forEach(s => {
                 const k = timeoutKey(recordId, idx, s.key);
                 if (transcribeTimeouts.has(k)) return;
@@ -222,9 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const row = document.getElementById(`segrow-${recordId}-${idx}`);
                         if (!row) return;
                         const td = row.querySelector(`td[data-svc="${s.key}"]`);
-                        if (td && (!td.textContent || td.textContent.trim() === '' || td.textContent === 'transcribing…')) {
-                            td.textContent = 'no result (timeout)';
-                        }
+                        if (td) td.textContent = 'no result (timeout)';
                         if (currentRecording && currentRecording.id === recordId) {
                             const arr = (currentRecording.timeouts[s.key] = currentRecording.timeouts[s.key] || []);
                             while (arr.length <= idx) arr.push(false);
@@ -448,11 +446,12 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                         } catch(_) {}
                     };
-                    const handleTranscript = () => {
+                    const handleTranscript = (msg) => {
                         try {
                             if (!currentRecording) return;
-                            // We only need to refresh the specific row; transcripts are filled server-side
-                            // The SSE code will do this as well when available
+                            const segIndex = (typeof msg.idx === 'number') ? msg.idx : msg.id;
+                            const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
+                            if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
                         } catch(_) {}
                     };
                     socket.addEventListener('message', (ev) => {

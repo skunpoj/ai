@@ -147,7 +147,11 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     # Prefer serverUrl so the playback points at a resolvable file immediately when available
     src_url = record.get("serverUrl") or record.get("audioUrl")
     if src_url:
-        player_bits.append(Audio(Source(src=src_url, type="audio/webm"), controls=True))
+        try:
+            mt = "audio/ogg" if (str(src_url).lower().endswith(".ogg") or "/ogg" in str(src_url).lower()) else "audio/webm"
+        except Exception:
+            mt = "audio/webm"
+        player_bits.append(Audio(Source(src=src_url, type=mt), controls=True))
     # no explicit download link
     size_bytes = 0
     if isinstance(record.get("serverSizeBytes"), int) and record["serverSizeBytes"] > 0:
@@ -225,7 +229,8 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
     for s in services:
         arr = transcripts.get(s["key"], []) or []
         txt = arr[idx] if idx < len(arr) else ""
-        svc_cells.append(Td(txt or "transcribing…", data_svc=s["key"]))
+        # show blank initially; timeouts will fill 'no result (timeout)' client-side
+        svc_cells.append(Td(txt or "", data_svc=s["key"]))
     import json as __json
     return Tr(
         seg_cell,
