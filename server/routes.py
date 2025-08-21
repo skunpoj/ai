@@ -168,6 +168,12 @@ def build_panel_html(record: Dict[str, Any]) -> str:
             if record.get("serverUrl"):
                 player_bits.append(Space(" "))
                 player_bits.append(Button("Load Full", id=f"loadFull-{record.get('id','')}", **{"data-load-full": record.get("serverUrl")}))
+                # Add a download icon next to the player with same behavior
+                player_bits.append(Space(" "))
+                try:
+                    player_bits.append(A("📥", href=record.get("serverUrl"), download=True, title="Download", **{"data-load-full": record.get("serverUrl")}, style="cursor:pointer;text-decoration:none"))
+                except Exception:
+                    pass
         except Exception:
             pass
     # no explicit download link
@@ -189,10 +195,13 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     player_div = Div(*player_bits, style="margin-bottom:8px", id=f"recordmeta-{record.get('id','')}")
 
     panel = Div(
-        hdr,
-        player_div,
         Div(
-            # H3("Full Record"),
+            Table(
+                Tbody(
+                    Tr(player_div),
+                    Tr(hdr),
+                )
+            )
             full_table
             ),
         Div(
@@ -329,7 +338,7 @@ def render_full_row(req) -> Any:
                     human = f"({int(round(size/1024))} KB)"
                 elif size > 0:
                     human = f"({size} B)"
-                first_cell_bits = [A("📥", href=record.get("serverUrl"), download=True, title="Download"), Space(" "), Small(human)]
+                first_cell_bits = [A("📥", href=record.get("serverUrl"), download=True, title="Download", **{"data-load-full": record.get("serverUrl")}, style="cursor:pointer;text-decoration:none"), Space(" "), Small(human, **{"data-load-full": record.get("serverUrl")}, style="cursor:pointer")]
         except Exception:
             first_cell_bits = []
         full_cells: List[Any] = []
