@@ -292,7 +292,29 @@ def render_full_row(req) -> Any:
     try:
         services = [s for s in services_json() if s.get("enabled")]
         full_header = Tr(*[Th(s["label"]) for s in services])
-        full_row = Tr(*[Td(((record.get("fullAppend", {}) or {}).get(s["key"], ""))) for s in services], id=f"fullrow-{record.get('id','')}")
+        # Build first column with download icon + size when available
+        first_cell_bits: List[Any] = []
+        try:
+            if record.get("serverUrl"):
+                human = ""
+                size = int(record.get("serverSizeBytes") or 0)
+                if size >= 1048576:
+                    human = f"({round(size/1048576,1)} MB)"
+                elif size >= 1024:
+                    human = f"({int(round(size/1024))} KB)"
+                elif size > 0:
+                    human = f"({size} B)"
+                first_cell_bits = [A("📥", href=record.get("serverUrl"), download=True, title="Download"), Space(" "), Small(human)]
+        except Exception:
+            first_cell_bits = []
+        full_cells: List[Any] = []
+        for s in services:
+            val = ((record.get("fullAppend", {}) or {}).get(s["key"], ""))
+            if not full_cells and first_cell_bits:
+                full_cells.append(Td(*first_cell_bits, data_svc=s["key"]))
+            else:
+                full_cells.append(Td(val, data_svc=s["key"]))
+        full_row = Tr(*full_cells, id=f"fullrow-{record.get('id','')}")
         table = Table(THead(full_header), TBody(full_row), border="1", cellpadding="4", cellspacing="0", style="border-collapse:collapse; width:100%")
         html = str(table)
     except Exception:

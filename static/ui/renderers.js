@@ -56,11 +56,7 @@ export async function renderRecordingPanel(record) {
     segRowsHtml += `<tr id="segrow-${record.id}-${i}" hx-post="/render/segment_row" hx-trigger="refresh-row" hx-target="this" hx-swap="outerHTML" hx-vals="${hxVals}">${leftCells}${svcCells}</tr>`;
   }
   // If no segments yet, show a neutral placeholder row (no transcribing text yet)
-  if (!presentIdx.length) {
-    const services = (await getServices()).filter(s => !!s.enabled);
-    const svcCells = services.map(svc => `<td data-svc="${svc.key}"></td>`).join('');
-    segRowsHtml += `<tr id="segrow-${record.id}-0"><td>recording…</td><td></td><td></td>${svcCells}</tr>`;
-  }
+  // do not create neutral placeholder; pending countdown row is used during recording
 
   // Full record comparison row: one cell per service
   const fullCells = services.map(svc => `<td data-svc="${svc.key}">${record.fullAppend[svc.key] || ''}</td>`).join('');
