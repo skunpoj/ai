@@ -44,17 +44,17 @@ def build_segment_modal() -> Any:
         Div(Button("Check Connection", id="testConnection"), P("WebSocket: not connected", id="connStatus"))
     )
     content = Div(
-        H3("Segment & Models"),
+        H3("Settings"),
         len_group,
         provider_checks,
-        Button("Close", id="closeSegmentModal"),
+        Button("OK", id="okSegmentModal"),
         id="segmentModalContent",
         style="background:#222;padding:16px;border:1px solid #444;max-width:520px;margin:10% auto",
     )
     modal = Div(
         content,
         id="segmentModal",
-        style="display:none;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999",
+        style="display:block;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999",
     )
     return modal
 
@@ -67,7 +67,7 @@ def build_index():
             Div(
                 Button("Start Recording", id="startRecording"),
                 Button("Stop Recording", id="stopRecording", disabled=True),
-                Button("Segment & Models", id="openSegmentModal"),
+                Button("Setting", id="openSegmentModal"),
             # ),
             # Div(
                 Input(type="checkbox", id="autoTranscribeToggle", checked=True),
@@ -108,7 +108,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     def _td(txt: str) -> Any:
         return Td(txt)
 
-    # Full record section
+    # Full record section (no 'Transcribing…' indicator)
     full_header = Tr(*[Th(s["label"]) for s in services])
     full_row = Tr(*[Td((record.get("fullAppend", {}) or {}).get(s["key"], "")) for s in services], id=f"fullrow-{record.get('id','')}")
     full_table = Table(
@@ -132,8 +132,10 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     segments: List[Dict[str, Any]] = record.get("segments", []) or []
     transcripts: Dict[str, List[str]] = record.get("transcripts", {}) or {}
     # Determine max rows across all providers
-    max_seg = max([len(segments)] + [len(transcripts.get(k, [])) for k in ["google", "vertex", "gemini", "aws"]])
-    for i in range(max_seg):
+    # Render only present segments in descending order; cell text filled by client
+    present_idx = [i for i in range(len(segments)) if i < len(segments) and segments[i]]
+    present_idx.sort(reverse=True)
+    for i in present_idx:
         seg_rows.append(_render_segment_row(record, services, i))
     seg_table = Table(
         THead(seg_header),
@@ -164,7 +166,8 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     if isinstance(record.get("serverSizeBytes"), int) and record["serverSizeBytes"] > 0:
         kb = int(record["serverSizeBytes"]/1024)
         player_bits.append(Space(f" ({kb} KB)"))
-    player_div = Div(*player_bits, style="margin-bottom:8px")
+    # Ensure the meta container has a predictable id for live updates
+    player_div = Div(*player_bits, style="margin-bottom:8px", id=f"recordmeta-{record.get('id','')}")
 
     panel = Div(
         hdr,
@@ -230,7 +233,7 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
     for s in services:
         arr = transcripts.get(s["key"], []) or []
         txt = arr[idx] if idx < len(arr) else ""
-        svc_cells.append(Td(txt))
+        svc_cells.append(Td(txt or "transcribing…"))
     import json as __json
     return Tr(
         seg_cell,

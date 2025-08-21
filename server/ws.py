@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import base64
 import asyncio
 import json
@@ -27,10 +28,13 @@ async def ws_handler(websocket: WebSocket) -> None:
     requests_q = queue.Queue()
     pcm_requests_q = queue.Queue()
 
-    recordings_dir = os.path.join("static", "recordings")
+    # Use absolute static path relative to project root to ensure served path matches saved path
+    _ROOT = Path(__file__).resolve().parents[1]
+    recordings_dir = os.path.join(str(_ROOT), "static", "recordings")
     os.makedirs(recordings_dir, exist_ok=True)
     session_ts = now_ms()
-    server_filename = f"recording_{session_ts}.webm"
+    server_ext = "webm"  # will adjust to 'ogg' if client reports OGG
+    server_filename = f"recording_{session_ts}.{server_ext}"
     server_filepath = os.path.join(recordings_dir, server_filename)
     server_file = open(server_filepath, "ab")
 
@@ -78,6 +82,18 @@ async def ws_handler(websocket: WebSocket) -> None:
                 if mtype == "full_upload" and message.get("audio"):
                     try:
                         decoded_full = base64.b64decode(message.get("audio"))
+                        # Choose extension based on client-declared mime type
+                        try:
+                            client_mime = (message.get("mime") or "").lower()
+                            new_ext = "ogg" if ("ogg" in client_mime) else "webm"
+                        except Exception:
+                            new_ext = "webm"
+                        # If ext changes, update filename/filepath before writing
+                        nonlocal server_ext, server_filename, server_filepath
+                        if new_ext != server_ext:
+                            server_ext = new_ext
+                            server_filename = f"recording_{session_ts}.{server_ext}"
+                            server_filepath = os.path.join(recordings_dir, server_filename)
                         try:
                             if not server_file.closed:
                                 server_file.close()

@@ -34,10 +34,12 @@ cred = ensure_google_credentials_from_env()
 SEGMENT_MS = SEGMENT_MS_DEFAULT
 
 app, rt = fast_app(exts='ws') # Ensure 'exts='ws'' is present
-app.static_route_exts(prefix="/static", static_path="static") # Configure static files serving
+# Serve static from an absolute path to avoid CWD-related 404s
+_STATIC_DIR = os.path.join(_ROOT, "static")
+app.static_route_exts(prefix="/static", static_path=_STATIC_DIR) # Configure static files serving
 
 print(f"Current working directory: {os.getcwd()}")
-print(f"Absolute path to static directory: {os.path.abspath('static')}")
+print(f"Absolute path to static directory: {_STATIC_DIR}")
 
 # Initialize shared clients/state for modular services (Google STT, Gemini API, Vertex)
 try:

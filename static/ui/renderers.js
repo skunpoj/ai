@@ -30,23 +30,23 @@ export async function renderRecordingPanel(record) {
   // Fetch current services dynamically from backend
   const services = (await getServices()).filter(s => !!s.enabled);
 
-  // Segments grid rows
+  // Segments grid rows (descending order, newest first), with "transcribing…" placeholders
   let segRowsHtml = '';
-  const maxSeg = Math.max(
-    record.segments.length,
-    record.transcripts.google.length,
-    record.transcripts.vertex.length,
-    record.transcripts.gemini.length
-  );
-  for (let i = 0; i < maxSeg; i++) {
+  const presentIdx = [];
+  for (let i = 0; i < record.segments.length; i++) if (record.segments[i]) presentIdx.push(i);
+  presentIdx.sort((a, b) => b - a);
+  for (const i of presentIdx) {
     const seg = record.segments[i];
-    if (!seg) continue; // avoid segrow--n placeholders
     const leftCells = `
       <td>${seg ? `<audio controls src="${seg.url}"></audio>` : ''} ${seg && seg.url ? `<a href="${seg.url}" download>Download</a>` : ''} ${seg && seg.size ? `(${bytesToLabel(seg.size)})` : ''}</td>
       <td>${seg && seg.startMs ? new Date(seg.startMs).toLocaleTimeString() : ''}</td>
       <td>${seg && seg.endMs ? new Date(seg.endMs).toLocaleTimeString() : ''}</td>
     `;
-    const svcCells = services.map(svc => `<td data-svc="${svc.key}">${(record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : ''}</td>`).join('');
+    const svcCells = services.map(svc => {
+      const val = (record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : '';
+      const display = val ? val : 'transcribing…';
+      return `<td data-svc="${svc.key}">${display}</td>`;
+    }).join('');
     const hxVals = JSON.stringify({ record: JSON.stringify(record), idx: i }).replace(/"/g, '&quot;');
     segRowsHtml += `<tr id="segrow-${record.id}-${i}" hx-post="/render/segment_row" hx-trigger="refresh-row" hx-target="this" hx-swap="outerHTML" hx-vals="${hxVals}">${leftCells}${svcCells}</tr>`;
   }
@@ -61,7 +61,7 @@ export async function renderRecordingPanel(record) {
     </div>
     <div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div>
     <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
-      <h3>Full Record <span id="fullstatus-${record.id}" style="font-weight:normal;color:#888;margin-left:8px">Transcribing…</span></h3>
+      <h3>Full Record</h3>
       <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse; width:100%">
         <thead>
           <tr>
@@ -85,7 +85,7 @@ export async function renderRecordingPanel(record) {
             ${services.map(s => `<th>${s.label}</th>`).join('')}
           </tr>
         </thead>
-        <tbody>
+        <tbody id="segtbody-${record.id}">
           ${segRowsHtml}
         </tbody>
       </table>
