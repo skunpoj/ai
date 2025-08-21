@@ -86,6 +86,26 @@ def update_service(req: Any) -> Any:
     except Exception:
         return JSONResponse(registry_list())
 
+@rt("/gemini_api_key", methods=["POST"])
+def set_gemini_key(req: Any) -> Any:
+    try:
+        data = req.json()
+        key = str(data.get("api_key") or "").strip()
+        ok = app_state.set_gemini_api_key(key)
+        # Optionally enable gemini service when key is set successfully
+        if ok:
+            try:
+                set_service_enabled("gemini", True)
+            except Exception:
+                pass
+        return JSONResponse({
+            "ok": ok,
+            "masked": app_state.gemini_api_key_masked,
+            "enabled": ok
+        })
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
 
 @app.ws("/ws_stream") # Dedicated WebSocket endpoint for audio streaming
 async def ws_test(websocket: WebSocket):

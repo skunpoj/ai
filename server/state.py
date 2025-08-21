@@ -46,6 +46,8 @@ class AppState:
         self.auth_info: Optional[Dict[str, Any]] = None
 
         self.gemini_model: Optional[object] = None
+        self.gemini_api_ready: bool = False
+        self.gemini_api_key_masked: str = ""
         self.vertex_client: Optional[object] = None
         self.vertex_model_name: str = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -97,16 +99,39 @@ class AppState:
         if gemini_api_key and gm is not None:
             try:
                 gm.configure(api_key=gemini_api_key)
-                self.gemini_model = gm.GenerativeModel("gemini-2.5-flash")
+                self.gemini_model = gm.GenerativeModel("gemini-1.5-flash")
+                self.gemini_api_ready = True
+                self.gemini_api_key_masked = (gemini_api_key[:4] + "..." + gemini_api_key[-4:]) if len(gemini_api_key) >= 8 else "***"
                 print("Gemini model initialized for parallel transcription.")
             except Exception as e:
                 print(f"Error initializing Gemini: {e}")
                 self.gemini_model = None
+                self.gemini_api_ready = False
         else:
             if not gemini_api_key:
                 print("GEMINI_API_KEY not set; skipping Gemini parallel transcription.")
             if gm is None:
                 print("google-generativeai not installed; skipping Gemini parallel transcription.")
+
+    def set_gemini_api_key(self, api_key: str) -> bool:
+        """Dynamically configure Gemini consumer API with a provided key."""
+        if gm is None:
+            self.gemini_model = None
+            self.gemini_api_ready = False
+            self.gemini_api_key_masked = ""
+            return False
+        try:
+            gm.configure(api_key=api_key)
+            self.gemini_model = gm.GenerativeModel("gemini-1.5-flash")
+            self.gemini_api_ready = True
+            self.gemini_api_key_masked = (api_key[:4] + "..." + api_key[-4:]) if isinstance(api_key, str) and len(api_key) >= 8 else "***"
+            return True
+        except Exception as e:
+            print(f"Error setting Gemini API key: {e}")
+            self.gemini_model = None
+            self.gemini_api_ready = False
+            self.gemini_api_key_masked = ""
+            return False
 
     def init_vertex(self) -> None:
         """Initialize Vertex GenAI SDK client using service account."""

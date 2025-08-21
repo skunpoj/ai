@@ -44,11 +44,19 @@ export async function renderRecordingPanel(record) {
     `;
     const svcCells = services.map(svc => {
       const val = (record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : '';
-      const display = val ? val : 'transcribing…';
+      let display = val ? val : 'transcribing…';
+      const timeouts = (record.timeouts && record.timeouts[svc.key]) || [];
+      if (!val && i < timeouts.length && timeouts[i]) display = 'no result (timeout)';
       return `<td data-svc="${svc.key}">${display}</td>`;
     }).join('');
     const hxVals = JSON.stringify({ record: JSON.stringify(record), idx: i }).replace(/"/g, '&quot;');
     segRowsHtml += `<tr id="segrow-${record.id}-${i}" hx-post="/render/segment_row" hx-trigger="refresh-row" hx-target="this" hx-swap="outerHTML" hx-vals="${hxVals}">${leftCells}${svcCells}</tr>`;
+  }
+  // If no segments yet, show a neutral placeholder row (no transcribing text yet)
+  if (!presentIdx.length) {
+    const services = (await getServices()).filter(s => !!s.enabled);
+    const svcCells = services.map(svc => `<td data-svc="${svc.key}"></td>`).join('');
+    segRowsHtml += `<tr id="segrow-${record.id}-0"><td>recording…</td><td></td><td></td>${svcCells}</tr>`;
   }
 
   // Full record comparison row: one cell per service

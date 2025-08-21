@@ -18,16 +18,17 @@ Service = Dict[str, object]
 
 
 _services: Dict[str, Service] = {
+    # Order hint: AWS first, Gemini API second, then Google, Vertex
+    "aws": {"key": "aws", "label": "AWS Transcribe (beta)", "enabled": os.environ.get("AWS_TRANSCRIBE_ENABLED", "false").lower() in ("1","true","yes")},
+    "gemini": {"key": "gemini", "label": "Gemini (API)", "enabled": True},
     "google": {"key": "google", "label": "Google STT", "enabled": False},
     "vertex": {"key": "vertex", "label": "Gemini (Vertex AI)", "enabled": False},
-    "gemini": {"key": "gemini", "label": "Gemini (API)", "enabled": True},
-    # AWS provider can be toggled via env; disabled by default
-    "aws": {"key": "aws", "label": "AWS Transcribe (beta)", "enabled": os.environ.get("AWS_TRANSCRIBE_ENABLED", "false").lower() in ("1","true","yes")},
 }
 
 
 def list_services() -> List[Service]:
-    return list(_services.values())
+    # Preserve order defined above
+    return [ _services[k] for k in _services.keys() ]
 
 
 def set_service_enabled(key: str, enabled: bool) -> List[Service]:

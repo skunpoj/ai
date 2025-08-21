@@ -46,6 +46,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const openSegmentModalBtn = document.getElementById('openSegmentModal');
     const segmentModal = document.getElementById('segmentModal');
     const okSegmentModalBtn = document.getElementById('okSegmentModal');
+    const modelInfo = document.getElementById('modelInfo');
+    const lblGoogle = document.getElementById('lbl_google');
+    const lblVertex = document.getElementById('lbl_vertex');
+    const lblGemini = document.getElementById('lbl_gemini');
+    const lblAws = document.getElementById('lbl_aws');
+    const credGoogle = document.getElementById('cred_google');
+    const credVertex = document.getElementById('cred_vertex');
+    const credGemini = document.getElementById('cred_gemini');
+    const credAws = document.getElementById('cred_aws');
+    const geminiApiKeyInput = document.getElementById('geminiApiKey');
+    const useGeminiKeyBtn = document.getElementById('useGeminiKey');
     const fullTranscriptContainer = document.getElementById('fullTranscriptContainer');
     const serviceAdminRoot = null; // removed separate admin; now in modal
     // Recorder helpers
@@ -53,6 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let recOptions = {};
     let recMimeType = '';
     let segmentTimerId = null;
+    const transcribeTimeouts = new Map(); // key: `${recId}:${idx}:${svc}` -> timeoutId
     
     // Add a connection status and test button UI elements if not present
     let connStatus = document.getElementById('connStatus');
@@ -175,6 +187,103 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     wireProviderModal();
 
+    function timeoutKey(recordId, idx, svc) {
+        return `${recordId}:${idx}:${svc}`;
+    }
+    function clearSvcTimeout(recordId, idx, svc) {
+        const k = timeoutKey(recordId, idx, svc);
+        const t = transcribeTimeouts.get(k);
+        if (t) {
+            clearTimeout(t);
+            transcribeTimeouts.delete(k);
+        }
+    }
+    async function scheduleSegmentTimeouts(recordId, idx) {
+        try {
+            const services = await getServices();
+            const enabled = services.filter(s => s.enabled);
+            const TIMEOUT_MS = 30000;
+            enabled.forEach(s => {
+                const k = timeoutKey(recordId, idx, s.key);
+                if (transcribeTimeouts.has(k)) return;
+                const to = setTimeout(() => {
+                    try {
+                        const row = document.getElementById(`segrow-${recordId}-${idx}`);
+                        if (!row) return;
+                        const td = row.querySelector(`td[data-svc="${s.key}"]`);
+                        if (td && (!td.textContent || td.textContent.trim() === '' || td.textContent === 'transcribing…')) {
+                            td.textContent = 'no result (timeout)';
+                        }
+                        if (currentRecording && currentRecording.id === recordId) {
+                            const arr = (currentRecording.timeouts[s.key] = currentRecording.timeouts[s.key] || []);
+                            while (arr.length <= idx) arr.push(false);
+                            arr[idx] = true;
+                        }
+                    } catch(_) {}
+                    transcribeTimeouts.delete(k);
+                }, TIMEOUT_MS);
+                transcribeTimeouts.set(k, to);
+            });
+        } catch(_) {}
+    }
+
+    function updateInlineCredentials() {
+        const ready = !!window.GOOGLE_AUTH_READY;
+        const info = window.GOOGLE_AUTH_INFO || {};
+        const snippet = (label) => `${label}: ${ready ? 'ready' : 'not ready'}${info.project_id ? ` · ${info.project_id}` : ''}${info.client_email_masked ? ` · ${info.client_email_masked}` : ''}${info.private_key_id_masked ? ` · ${info.private_key_id_masked}` : ''}`;
+        if (credGoogle) credGoogle.textContent = snippet('Google');
+        // Vertex shares the same underlying service account; mirror the same masked info
+        if (credVertex) credVertex.textContent = snippet('Vertex');
+    }
+    function showModelInfo(key, extra) {
+        updateInlineCredentials();
+        if (!modelInfo) return;
+        const ready = !!window.GOOGLE_AUTH_READY;
+        const info = window.GOOGLE_AUTH_INFO || {};
+        const parts = [];
+        if (key === 'google') {
+            parts.push(`Google STT: ${ready ? 'ready' : 'not ready'}`);
+        } else if (key === 'vertex') {
+            parts.push(`Gemini Vertex: ${ready ? 'ready' : 'not ready'}`);
+        } else if (key === 'gemini') {
+            parts.push('Gemini API: configured');
+        } else if (key === 'aws') {
+            parts.push('AWS Transcribe: beta');
+        }
+        if (info.project_id) parts.push(`project: ${info.project_id}`);
+        if (info.client_email_masked) parts.push(`client: ${info.client_email_masked}`);
+        if (info.private_key_id_masked) parts.push(`key: ${info.private_key_id_masked}`);
+        if (extra) parts.push(extra);
+        modelInfo.textContent = parts.join(' · ');
+    }
+    if (lblGoogle) lblGoogle.addEventListener('click', () => showModelInfo('google'));
+    if (lblVertex) lblVertex.addEventListener('click', () => showModelInfo('vertex'));
+    if (lblGemini) lblGemini.addEventListener('click', () => showModelInfo('gemini'));
+    if (lblAws) lblAws.addEventListener('click', () => showModelInfo('aws'));
+    // Initialize inline creds on load
+    updateInlineCredentials();
+
+    // Wire Gemini API key submission
+    if (useGeminiKeyBtn && geminiApiKeyInput) {
+        useGeminiKeyBtn.addEventListener('click', async () => {
+            const key = (geminiApiKeyInput.value || '').trim();
+            if (!key) return;
+            try {
+                const res = await fetch('/gemini_api_key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: key }) });
+                const data = await res.json();
+                if (data && data.ok) {
+                    if (credGemini) credGemini.textContent = `Gemini: ready · ${data.masked || ''}`;
+                    // Toggle service enabled state
+                    try { await fetch('/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'gemini', enabled: true }) }); } catch(_) {}
+                } else {
+                    if (credGemini) credGemini.textContent = 'Gemini: key rejected';
+                }
+            } catch (e) {
+                if (credGemini) credGemini.textContent = 'Gemini: key error';
+            }
+        });
+    }
+
     // Start a new recording session; create a new tab immediately,
     // connect the websocket, and start the full and segment recorders.
     startRecordingButton.addEventListener('click', async () => {
@@ -203,12 +312,33 @@ document.addEventListener('DOMContentLoaded', () => {
             durationMs: null,
             segments: [],
             transcripts: { google: [], googleLive: [], vertex: [], gemini: [] },
-            fullAppend: { googleLive: '', google: '', vertex: '', gemini: '' }
+            fullAppend: { googleLive: '', google: '', vertex: '', gemini: '' },
+            timeouts: { google: [], vertex: [], gemini: [], aws: [] }
         };
         recordings.push(currentRecording);
         lastRecordingId = currentRecording.id;
         ensureRecordingTab(currentRecording);
         renderRecordingPanel(currentRecording);
+
+        // Insert an initial neutral placeholder row if not already present
+        try {
+            const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
+            if (tbody && !document.getElementById(`segrow-${currentRecording.id}-0`)) {
+                const tr = document.createElement('tr');
+                tr.id = `segrow-${currentRecording.id}-0`;
+                tr.innerHTML = `<td>recording…</td><td></td><td></td>`;
+                try {
+                    const services = await getServices();
+                    services.filter(s => s.enabled).forEach(s => {
+                        const td = document.createElement('td');
+                        td.setAttribute('data-svc', s.key);
+                        td.textContent = '';
+                        tr.appendChild(td);
+                    });
+                } catch(_) {}
+                tbody.insertBefore(tr, tbody.firstChild);
+            }
+        } catch(_) {}
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1, sampleRate: 48000 } });
@@ -365,8 +495,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                 });
                             } catch(_) {}
                             tbody.insertBefore(tr, tbody.firstChild);
+                            // Schedule timeouts per enabled service so placeholders don't stay forever
+                            scheduleSegmentTimeouts(currentRecording.id, segIndex);
+                            // Remove the initial placeholder if present
+                            const ph = document.getElementById(`segrow-${currentRecording.id}-0`);
+                            if (ph && ph.firstChild && ph.firstChild.textContent === 'recording…') {
+                                try { tbody.removeChild(ph); } catch(_) {}
+                            }
                         } else {
                             await refreshSegmentRow(currentRecording, segIndex);
+                            setTimeout(() => scheduleSegmentTimeouts(currentRecording.id, segIndex), 60);
                         }
                     }
                 } else if (data.type === 'segment_transcript' || data.type === 'segment_transcript_google') {
@@ -383,6 +521,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (row) {
                             const td = row.querySelector('td[data-svc="google"]');
                             if (td) td.textContent = (currentRecording.transcripts.google[segIndex] || '').trim() || '...';
+                        }
+                        clearSvcTimeout(currentRecording.id, segIndex, 'google');
+                        if (currentRecording && currentRecording.timeouts && currentRecording.timeouts.google) {
+                            while (currentRecording.timeouts.google.length <= segIndex) currentRecording.timeouts.google.push(false);
+                            currentRecording.timeouts.google[segIndex] = false;
                         }
                         const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="google"]`);
                         if (full) {
@@ -405,6 +548,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             const td = row.querySelector('td[data-svc="vertex"]');
                             if (td) td.textContent = (currentRecording.transcripts.vertex[segIndex] || '').trim() || '...';
                         }
+                        clearSvcTimeout(currentRecording.id, segIndex, 'vertex');
+                        if (currentRecording && currentRecording.timeouts && currentRecording.timeouts.vertex) {
+                            while (currentRecording.timeouts.vertex.length <= segIndex) currentRecording.timeouts.vertex.push(false);
+                            currentRecording.timeouts.vertex[segIndex] = false;
+                        }
                         const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="vertex"]`);
                         if (full) {
                             full.textContent = currentRecording.fullAppend.vertex || '';
@@ -426,11 +574,36 @@ document.addEventListener('DOMContentLoaded', () => {
                             const td = row.querySelector('td[data-svc="gemini"]');
                             if (td) td.textContent = (currentRecording.transcripts.gemini[segIndex] || '').trim() || '...';
                         }
+                        clearSvcTimeout(currentRecording.id, segIndex, 'gemini');
+                        if (currentRecording && currentRecording.timeouts && currentRecording.timeouts.gemini) {
+                            while (currentRecording.timeouts.gemini.length <= segIndex) currentRecording.timeouts.gemini.push(false);
+                            currentRecording.timeouts.gemini[segIndex] = false;
+                        }
                         const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="gemini"]`);
                         if (full) {
                             full.textContent = currentRecording.fullAppend.gemini || '';
                             const fs = document.getElementById(`fullstatus-${currentRecording.id}`);
                             if (fs) fs.style.display = 'none';
+                        }
+                    }
+                } else if (data.type === 'segment_transcript_aws') {
+                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                    const key = `aws:${segIndex}:${data.transcript || ''}`;
+                    if (seenTxKeys.has(key)) return;
+                    seenTxKeys.add(key);
+                    if (currentRecording) {
+                        currentRecording.transcripts.aws = currentRecording.transcripts.aws || [];
+                        while (currentRecording.transcripts.aws.length <= segIndex) currentRecording.transcripts.aws.push('');
+                        currentRecording.transcripts.aws[segIndex] = data.transcript || '';
+                        const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
+                        if (row) {
+                            const td = row.querySelector('td[data-svc="aws"]');
+                            if (td) td.textContent = (currentRecording.transcripts.aws[segIndex] || '').trim() || '...';
+                        }
+                        clearSvcTimeout(currentRecording.id, segIndex, 'aws');
+                        if (currentRecording && currentRecording.timeouts && currentRecording.timeouts.aws) {
+                            while (currentRecording.timeouts.aws.length <= segIndex) currentRecording.timeouts.aws.push(false);
+                            currentRecording.timeouts.aws[segIndex] = false;
                         }
                     }
                 } else if (data.type === 'saved') {
@@ -646,13 +819,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Manual connection check button (inside modal)
     if (testConnBtn) testConnBtn.addEventListener('click', async () => {
+        connStatus.innerText = 'WebSocket: connecting…';
         await ensureSocketOpen();
-        const sendPing = () => {
-            try { socket.send(JSON.stringify({ type: 'ping' })); connStatus.innerText = 'WebSocket: ping sent'; }
-            catch (e) { console.warn('Frontend: ping send failed:', e); connStatus.innerText = 'WebSocket: ping failed'; }
+        const start = Date.now();
+        const handler = (ev) => {
+            const rtt = Date.now() - start;
+            connStatus.innerText = `WebSocket: pong · ${rtt} ms`;
         };
-        if (socket && socket.readyState === WebSocket.OPEN) sendPing();
-        else if (socket) socket.addEventListener('open', sendPing, { once: true });
+        try {
+            socket.addEventListener('message', function onmsg(e){
+                try { const m = JSON.parse(e.data); if (m && m.type === 'pong') { handler(); socket.removeEventListener('message', onmsg); } } catch(_) {}
+            });
+            socket.send(JSON.stringify({ type: 'ping' }));
+            connStatus.innerText = 'WebSocket: ping…';
+            setTimeout(() => {
+                if (connStatus.innerText.startsWith('WebSocket: ping')) connStatus.innerText = 'WebSocket: no response';
+            }, 3000);
+        } catch (e) {
+            console.warn('Frontend: ping send failed:', e);
+            connStatus.innerText = 'WebSocket: ping failed';
+        }
     });
 
     /**
