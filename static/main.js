@@ -830,7 +830,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const testRecord2s = document.getElementById('testRecord2s');
         const testResults = document.getElementById('testResults');
         let testBlob = null;
-        // Do not auto-load a sample to avoid 404/head request noise; user can upload or record
+        // Auto-load built-in sample if present under /static
+        if (testAudio && !testAudio.src) {
+            try {
+                testAudio.src = '/static/sample.ogg';
+            } catch(_) {}
+        }
         if (testUpload) testUpload.addEventListener('change', async (e) => {
             try {
                 const f = e.target.files && e.target.files[0];
