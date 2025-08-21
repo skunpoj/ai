@@ -31,7 +31,15 @@ def _b64_to_bytes(data_url_or_b64: str) -> bytes:
         s = data_url_or_b64
         if s.startswith("data:") and "," in s:
             s = s.split(",",1)[1]
-        return base64.b64decode(s)
+        # Normalize whitespace and padding
+        s = s.strip().replace('\n','').replace('\r','')
+        missing = (-len(s)) % 4
+        if missing:
+            s += "=" * missing
+        try:
+            return base64.b64decode(s)
+        except Exception:
+            return base64.urlsafe_b64decode(s)
     except Exception:
         return b""
 from typing import Any, List, Dict

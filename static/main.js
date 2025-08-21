@@ -239,7 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateInlineCredentials() {
         const ready = !!window.GOOGLE_AUTH_READY;
         const info = window.GOOGLE_AUTH_INFO || {};
-        const snippet = (label) => `${label}: ${ready ? 'ready' : 'not ready'}${info.project_id ? ` · ${info.project_id}` : ''}${info.client_email_masked ? ` · ${info.client_email_masked}` : ''}${info.private_key_id_masked ? ` · ${info.private_key_id_masked}` : ''}`;
+        const snippet = (label) => `${label}: ${ready ? 'ready' : 'not ready'}${info.project_id ? ` · ${info.project_id}` : ''}`;
         if (credGoogle) credGoogle.textContent = snippet('Google');
         // Vertex shares the same underlying service account; mirror the same masked info
         if (credVertex) credVertex.textContent = snippet('Vertex');
@@ -260,8 +260,6 @@ document.addEventListener('DOMContentLoaded', () => {
             parts.push('AWS Transcribe: beta');
         }
         if (info.project_id) parts.push(`project: ${info.project_id}`);
-        if (info.client_email_masked) parts.push(`client: ${info.client_email_masked}`);
-        if (info.private_key_id_masked) parts.push(`key: ${info.private_key_id_masked}`);
         if (extra) parts.push(extra);
         modelInfo.textContent = parts.join(' · ');
     }
@@ -754,7 +752,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('beforeunload', () => { try { if (socket && socket.readyState === WebSocket.OPEN) socket.close(); } catch(_) {} });
     console.log('Frontend: DOMContentLoaded - Ready for interaction.');
 
-    // Delegate click handler to force-load full audio into a blob for immediate download availability
+    // Delegate click handler to force-load full audio into a blob and trigger download immediately
     document.addEventListener('click', async (ev) => {
         try {
             const el = ev.target && ev.target.closest ? ev.target.closest('[data-load-full]') : null;
@@ -768,6 +766,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const resp = await fetch(url, { cache: 'no-store' });
             const blob = await resp.blob();
             const objectUrl = URL.createObjectURL(blob);
+            // trigger download via a temporary anchor
+            try {
+                const a = document.createElement('a');
+                a.href = objectUrl;
+                a.download = '';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            } catch(_) {}
             // find the nearest audio element in the same cell/container
             let audio = null;
             const td = el.closest ? el.closest('td') : null;

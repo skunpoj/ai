@@ -24,6 +24,14 @@ def build_index():
     title = "Live Transcription & Translation"
     return Title(title), \
         Link(rel="icon", href="/static/favicon.ico"), \
+        Style("""
+html, body { margin:0; padding:0; }
+body { background:transparent; }
+* { border:0 !important; }
+table { border-collapse:collapse; border-spacing:0; width:100%; }
+th, td { padding:0; }
+hr { display:none; }
+        """), \
         Div(
             Div(
                 Button("Start Recording", id="startRecording"),
@@ -41,7 +49,7 @@ def build_index():
             build_segment_modal(),
             Div(
                 H2("Recordings"),
-                Div(id="recordTabs", style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"),
+                Div(id="recordTabs", style="display:flex;gap:0;flex-wrap:wrap;margin:0 0 8px 0"),
                 Div(id="recordPanels")
             ),
             # HTMX is bundled by FastHTML; no need to load separately
@@ -52,8 +60,8 @@ def build_index():
                 f"window.GOOGLE_AUTH_INFO = {json.dumps(app_state.auth_info or {})};\n"
                 f"window.GOOGLE_AUTH_READY = {( 'true' if (app_state.speech_client and app_state.streaming_config) else 'false' )};\n"
                 "console.log('Frontend: Google auth on load:', { ready: window.GOOGLE_AUTH_READY, info: window.GOOGLE_AUTH_INFO });\n"
-                "try { const cg = document.getElementById('cred_google'); if (cg) { const i = window.GOOGLE_AUTH_INFO||{}; cg.textContent = `Google: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}${i.client_email_masked ? ' · ' + i.client_email_masked : ''}${i.private_key_id_masked ? ' · ' + i.private_key_id_masked : ''}`; } } catch(_) {}\n"
-                "try { const cv = document.getElementById('cred_vertex'); if (cv) { const i = window.GOOGLE_AUTH_INFO||{}; cv.textContent = `Vertex: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}${i.client_email_masked ? ' · ' + i.client_email_masked : ''}${i.private_key_id_masked ? ' · ' + i.private_key_id_masked : ''}`; } } catch(_) {}"
+                "try { const cg = document.getElementById('cred_google'); if (cg) { const i = window.GOOGLE_AUTH_INFO||{}; cg.textContent = `Google: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}`; } } catch(_) {}\n"
+                "try { const cv = document.getElementById('cred_vertex'); if (cv) { const i = window.GOOGLE_AUTH_INFO||{}; cv.textContent = `Vertex: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}`; } } catch(_) {}"
             ),
             Script(src="/static/main.js", type="module")
         )
@@ -87,7 +95,10 @@ def build_panel_html(record: Dict[str, Any]) -> str:
                 human = f"({size} B)"
         except Exception:
             human = ""
-        first_cell_bits = [Small(human)]
+        try:
+            first_cell_bits = [Small(human, **{"data-load-full": record.get("serverUrl")}, style="cursor:pointer")]
+        except Exception:
+            first_cell_bits = [Small(human)]
     full_cells = []
     for s in services:
         val = ((record.get("fullAppend", {}) or {}).get(s["key"], ""))
@@ -106,7 +117,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         style="border-collapse:collapse; border-spacing:0; border:0; width:100%",
         id=f"fulltable-{record.get('id','')}",
         hx_post="/render/full_row",
-        hx_trigger="refresh-full from:body",
+        hx_trigger="refresh-full",
         hx_target="this",
         hx_swap="innerHTML",
         hx_vals=json.dumps({"record": record})
@@ -171,7 +182,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
             url = record.get("serverUrl") or ""
             # Make size clickable to force-load entire file into an in-memory blob
             player_bits.append(Space())
-            player_bits.append(Small(f"({kb} KB)", id=f"size-{record.get('id','')}", data_load_full=url, style="cursor:pointer"))
+            player_bits.append(Small(f"({kb} KB)", id=f"size-{record.get('id','')}", **{"data-load-full": url}, style="cursor:pointer"))
         except Exception:
             player_bits.append(Space(f" ({kb} KB)"))
     # Ensure the meta container has a predictable id for live updates
@@ -256,7 +267,7 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
         *svc_cells,
         id=f"segrow-{record.get('id','')}-{idx}",
         hx_post="/render/segment_row",
-        hx_trigger="refresh-row from:body",
+        hx_trigger="refresh-row",
         hx_target="this",
         hx_swap="outerHTML",
         hx_vals=__json.dumps({"record": record, "idx": idx})
