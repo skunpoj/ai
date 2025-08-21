@@ -87,7 +87,8 @@ class AppState:
 
                 self.auth_info = {
                     "project_id": short(project_id, 2),
-                    "client_email_masked": short((client_email or '').split('@')[0], 2) + ("@" + (client_email.split("@")[-1] if (client_email and "@" in client_email) else "***")),
+                    # Show only the first 2 chars of the local-part; omit domain entirely (no trailing @)
+                    "client_email_masked": short((client_email or '').split('@')[0], 2),
                     "private_key_id_masked": short(private_key_id, 2),
                 }
             except Exception:
