@@ -1,9 +1,11 @@
 // main.js is loaded as type="module" from app.py
-import { getServices } from '/static/ui/services.js';
+import { getServices, getServicesCached } from '/static/ui/services.js';
 import { bytesToLabel } from '/static/ui/format.js';
 import { ensureTab as ensureUITab, activateTab as activateUITab } from '/static/ui/tabs.js';
 import { renderRecordingPanel as renderPanel } from '/static/ui/renderers.js';
-import { buildWSUrl, parseWSMessage, sendJSON, arrayBufferToBase64 } from '/static/ui/ws.js';
+import { buildWSUrl, parseWSMessage, sendJSON, arrayBufferToBase64, ensureOpenSocket } from '/static/ui/ws.js';
+import { showPendingCountdown, prependSegmentRow, refreshFullRow, refreshSegmentRow } from '/static/ui/segments.js';
+import { setButtonsOnStart, setButtonsOnStop } from '/static/ui/recording.js';
 
 // Main frontend controller: wires recording controls, websocket, segments loop,
 // tabbed UI, and dynamic provider columns.
@@ -200,7 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     async function scheduleSegmentTimeouts(recordId, idx) {
         try {
-            const services = await getServices();
+            const services = await getServicesCached();
             const enabled = services.filter(s => s.enabled);
             const TIMEOUT_MS = 30000;
             enabled.forEach(s => {
@@ -269,6 +271,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const key = (geminiApiKeyInput.value || '').trim();
             if (!key) return;
             try {
+                // Use POST; this goes via HTTP, not WS. Delay UI spinner or disable only briefly.
                 const res = await fetch('/gemini_api_key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: key }) });
                 let data = null;
                 try {
@@ -334,7 +337,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 tr.id = `segrow-${currentRecording.id}-0`;
                 tr.innerHTML = `<td>recording…</td><td></td><td></td>`;
                 try {
-                    const services = await getServices();
+                    const services = await getServicesCached();
                     services.filter(s => s.enabled).forEach(s => {
                         const td = document.createElement('td');
                         td.setAttribute('data-svc', s.key);
@@ -474,36 +477,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const existing = document.getElementById(rowId);
                         if (tbody && !existing) {
                             // Build a minimal row with placeholders and prepend
-                            const tr = document.createElement('tr');
-                            tr.id = rowId;
-                            tr.setAttribute('hx-post', '/render/segment_row');
-                            tr.setAttribute('hx-trigger', 'refresh-row');
-                            tr.setAttribute('hx-target', 'this');
-                            tr.setAttribute('hx-swap', 'outerHTML');
-                            tr.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
-                            const audioCell = document.createElement('td');
-                            audioCell.innerHTML = `${data.url ? `<audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a>` : ''} ${data.size ? `(${(data.size/1024).toFixed(0)} KB)` : ''}`;
-                            const startCell = document.createElement('td');
-                            startCell.textContent = new Date(startMs).toLocaleTimeString();
-                            const endCell = document.createElement('td');
-                            endCell.textContent = new Date(endMs).toLocaleTimeString();
-                            tr.appendChild(audioCell);
-                            tr.appendChild(startCell);
-                            tr.appendChild(endCell);
-                            // Add one cell per enabled service as placeholder
-                            try {
-                                const services = await getServices();
-                                services.filter(s => s.enabled).forEach(s => {
-                                    const td = document.createElement('td');
-                                    td.setAttribute('data-svc', s.key);
-                                    td.textContent = 'transcribing…';
-                                    tr.appendChild(td);
-                                });
-                            } catch(_) {}
-                            // Remove pending countdown row if present, then insert new row at top
-                            const pending = document.getElementById(`segpending-${currentRecording.id}`);
-                            if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
-                            tbody.insertBefore(tr, tbody.firstChild);
+                            const tr = await prependSegmentRow(currentRecording, segIndex, data, startMs, endMs);
                             // Schedule timeouts per enabled service so placeholders don't stay forever
                             scheduleSegmentTimeouts(currentRecording.id, segIndex);
                             // Remove the initial placeholder if present
@@ -718,38 +692,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     try { segmentRecorder.start(); } catch (e) { console.warn('Frontend: segmentRecorder start failed:', e); segmentLoopActive = false; return; }
                     // Live countdown for this segment in a pending top row within the segments table
                     try {
-                        const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
-                        if (tbody) {
-                            const pendingId = `segpending-${currentRecording.id}`;
-                            let tr = document.getElementById(pendingId);
-                            if (!tr) {
-                                tr = document.createElement('tr');
-                                tr.id = pendingId;
-                                const td = document.createElement('td');
-                                // Span across all columns while pending
-                                const segTable = document.getElementById(`segtable-${currentRecording.id}`);
-                                let colCount = 4;
-                                try {
-                                    if (segTable) colCount = Math.max(1, segTable.querySelectorAll('thead th').length);
-                                } catch(_) {}
-                                td.setAttribute('colspan', String(colCount));
-                                tr.appendChild(td);
-                                tbody.insertBefore(tr, tbody.firstChild);
-                            }
-                            const start = Date.now();
-                            const tick = () => {
-                                const node = document.getElementById(pendingId);
-                                if (!segmentLoopActive || !node) return;
-                                const elapsed = Date.now() - start;
-                                const remaining = Math.max(0, Math.ceil((segmentMs - elapsed) / 1000));
-                                const firstCell = node.firstChild;
-                                if (firstCell) firstCell.textContent = `Recording for ${remaining} seconds...`;
-                                if (elapsed < segmentMs && segmentRecorder && segmentRecorder.state === 'recording') {
-                                    requestAnimationFrame(tick);
-                                }
-                            };
-                            requestAnimationFrame(tick);
-                        }
+                        showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording'));
                     } catch(_) {}
                     setTimeout(() => { try { if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch (_) {} }, segmentMs);
                 };
@@ -815,6 +758,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             mediaRecorder.stop();
         }
+        // Close socket after a short delay to allow final 'saved' message, then reopen on next start
+        try {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                setTimeout(() => { try { socket.close(); } catch(_) {} }, 500);
+            }
+        } catch(_) {}
     });
 
     // Transcription control

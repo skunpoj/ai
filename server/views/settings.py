@@ -42,21 +42,21 @@ def build_settings_modal() -> Any:
                 style="margin-bottom:8px"
             ),
             Div(
-                Input(type="checkbox", id="svc_vertex", checked=True),
+                Input(type="checkbox", id="svc_vertex"),
                 Label("Gemini Vertex", _for="svc_vertex", id="lbl_vertex", style="cursor:pointer"),
                 Small("", id="cred_vertex", style="margin-left:6px;color:#aaa"),
                 style="margin-bottom:8px"
             ),
             Div(
-                Input(type="checkbox", id="svc_gemini"),
+                Input(type="checkbox", id="svc_gemini", checked=True),
                 Label("Gemini API", _for="svc_gemini", id="lbl_gemini", style="cursor:pointer"),
                 Small("", id="cred_gemini", style="margin-left:6px;color:#aaa"),
                 style="margin-bottom:8px"
             ),
             Div(
-                Input(type="text", id="geminiApiKey", placeholder="Enter Gemini API Key", style="flex:1;min-width:200px;margin-right:8px;display:inline-block"),
-                Button("Apply", id="useGeminiKey", style="display:inline-block;margin:0"),
-                style="margin-bottom:8px;display:flex;align-items:center;gap:8px"
+                Input(type="text", id="geminiApiKey", placeholder="Enter Gemini API Key", style="width:100%"),
+                Button("Apply", id="useGeminiKey"),
+                style="margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:8px"
             ),
             id="providerCheckboxes"
         ),

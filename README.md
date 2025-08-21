@@ -149,10 +149,13 @@ While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` en
   - aws_transcribe.py: AWS Transcribe scaffold (S3/streaming to be implemented)
   - registry.py: runtime registry; toggle services via `POST /services {key, enabled}`
 - static/
-  - main.js: UI logic (tabs per recording, segments grid, fetching services). Shows live "Recording for X seconds" countdown during segment capture and emits rich console logs for API status and errors.
+  - main.js: orchestrator; delegates to modular UI helpers
   - audio/pcm-worklet.js: AudioWorkletNode processor for PCM16 capture
-  - ui/services.js: fetches `/services`
-  - ui/format.js, ui/tabs.js: utilities
+  - ui/services.js: fetches `/services` with small TTL cache
+  - ui/ws.js: WebSocket utilities and ensureOpenSocket helper
+  - ui/segments.js: segment UI helpers (pending countdown, prepend row, elapsed formatter, HTMX refresh)
+  - ui/recording.js: recording control helpers (start/stop button states)
+  - ui/format.js, ui/tabs.js: small utilities
 
 ### Settings
 
@@ -230,6 +233,13 @@ To run Gemini using your service account (no API key), enable the Vertex AI SDK 
      ```
 
 With these set, the backend will use Vertex AI Gemini via the Google GenAI SDK. LangChain is also supported via `langchain-google-vertexai` where applicable, but audio transcription currently goes through the SDK's `models.generate_content` path for reliability.
+
+### UI behavior (Segments)
+
+- New segment appears at the top (descending order). Previous segments remain visible below.
+- A temporary "Recording for X seconds…" row is shown during segment capture and replaced by the new row when saved.
+- Start/End display elapsed time from recording start (m:ss), not wall time.
+- Download link uses an icon (📥) and shows file size.
 
 ### Provider troubleshooting and setup
 

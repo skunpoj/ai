@@ -48,4 +48,21 @@ export function arrayBufferToBase64(buffer) {
   return btoa(chunks.join(''));
 }
 
+/**
+ * Open or reuse a WebSocket connection; attaches basic status handlers once.
+ * @param {string} path e.g. '/ws_stream'
+ * @param {(ws: WebSocket)=>void} onOpen optional on-open callback
+ * @returns {WebSocket}
+ */
+export function ensureOpenSocket(path, onOpen) {
+  const wsUrl = buildWSUrl(window.location, path);
+  const ws = new WebSocket(wsUrl);
+  if (!ws._basicHandlersAttached) {
+    ws.addEventListener('open', () => { if (onOpen) onOpen(ws); });
+    ws.addEventListener('error', err => console.warn('WS error', err));
+    ws._basicHandlersAttached = true;
+  }
+  return ws;
+}
+
 
