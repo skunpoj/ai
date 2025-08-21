@@ -89,11 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // Removed authStatus UI; we'll only log masked info to console
 
-    // Log redacted Google auth info on load (from server-injected globals)
-    const initialAuthReady = typeof window.GOOGLE_AUTH_READY !== 'undefined' ? window.GOOGLE_AUTH_READY : false;
-    const initialAuthInfo = (typeof window.GOOGLE_AUTH_INFO !== 'undefined' && window.GOOGLE_AUTH_INFO) ? window.GOOGLE_AUTH_INFO : {};
-    console.log('Frontend: Google auth on load:', { ready: initialAuthReady, info: initialAuthInfo });
-    // Only log auth status; do not display in UI
+    // Auth info already logged by server-injected script; avoid duplicate console noise
 
     // This ensures CHUNK_SIZE is available from the backend-rendered script tag
     // Example: <script>let CHUNK_SIZE = 1600;</script>
@@ -162,7 +158,20 @@ document.addEventListener('DOMContentLoaded', () => {
             svcs.forEach(s => { if (map[s.key]) map[s.key].checked = !!s.enabled; });
         } catch (_) {}
     });
-    if (okSegmentModalBtn && segmentModal) okSegmentModalBtn.addEventListener('click', () => { segmentModal.style.display = 'none'; });
+    if (okSegmentModalBtn && segmentModal) okSegmentModalBtn.addEventListener('click', async () => {
+        // Sync provider selections to backend even if user didn't toggle each checkbox
+        try {
+            const keys = ['google','vertex','gemini','aws'];
+            for (const k of keys) {
+                const el = document.getElementById(`svc_${k}`);
+                if (!el) continue;
+                try { await fetch('/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: k, enabled: !!el.checked }) }); } catch(_) {}
+            }
+        } catch(_) {}
+        segmentModal.style.display = 'none';
+        // Re-render current panel to reflect updated columns
+        if (currentRecording) try { await renderRecordingPanel(currentRecording); } catch(_) {}
+    });
     // Force open modal and socket on initial load
     if (segmentModal) {
         segmentModal.style.display = 'block';
@@ -398,6 +407,64 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); } catch (e) { console.warn('Frontend: start on open failed:', e); }
                 startSegmentLoop();
+                // Attach WS message handler for UI updates as a fallback when SSE isn't available
+                try {
+                    const handleSegmentSaved = (data) => {
+                        try {
+                            if (!currentRecording) return;
+                            const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                            while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
+                            const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
+                            const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
+                            currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
+                            const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
+                            const rowId = `segrow-${currentRecording.id}-${segIndex}`;
+                            let row = document.getElementById(rowId);
+                            if (!row && tbody) {
+                                row = document.createElement('tr');
+                                row.id = rowId;
+                                row.setAttribute('hx-post', '/render/segment_row');
+                                row.setAttribute('hx-trigger', 'refresh-row');
+                                row.setAttribute('hx-target', 'this');
+                                row.setAttribute('hx-swap', 'outerHTML');
+                                row.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
+                                row.innerHTML = '<td></td><td></td><td></td>';
+                                const pending = document.getElementById(`segpending-${currentRecording.id}`);
+                                if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
+                                tbody.insertBefore(row, tbody.firstChild);
+                            }
+                            const target = document.getElementById(rowId);
+                            if (target) htmx.trigger(target, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
+                        } catch(_) {}
+                    };
+                    const handleSaved = (data) => {
+                        try {
+                            const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || recordings[recordings.length - 1]);
+                            if (rec) {
+                                if (data.url) rec.serverUrl = data.url;
+                                if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
+                                const fullEl = document.getElementById(`fulltable-${rec.id}`);
+                                if (fullEl) htmx.trigger(fullEl, 'refresh-full', { detail: { record: JSON.stringify(rec) } });
+                            }
+                        } catch(_) {}
+                    };
+                    const handleTranscript = () => {
+                        try {
+                            if (!currentRecording) return;
+                            // We only need to refresh the specific row; transcripts are filled server-side
+                            // The SSE code will do this as well when available
+                        } catch(_) {}
+                    };
+                    socket.addEventListener('message', (ev) => {
+                        try {
+                            const msg = JSON.parse(ev.data);
+                            if (!msg || !msg.type) return;
+                            if (msg.type === 'segment_saved') return handleSegmentSaved(msg);
+                            if (msg.type === 'saved') return handleSaved(msg);
+                            if (msg.type.startsWith('segment_transcript')) return handleTranscript(msg);
+                        } catch(_) {}
+                    });
+                } catch(_) {}
             };
             if (socket.readyState === WebSocket.OPEN) {
                 onSocketReady();
@@ -764,13 +831,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const testRecord2s = document.getElementById('testRecord2s');
         const testResults = document.getElementById('testResults');
         let testBlob = null;
-        // Load a built-in sample if present under static (optional), avoid 404 logs
-        if (testAudio && !testAudio.src) {
-            try {
-                const res = await fetch('/static/sample.ogg', { method: 'HEAD', cache: 'no-store' });
-                if (res.ok) testAudio.src = '/static/sample.ogg';
-            } catch(_) {}
-        }
+        // Do not auto-load a sample to avoid 404/head request noise; user can upload or record
         if (testUpload) testUpload.addEventListener('change', async (e) => {
             try {
                 const f = e.target.files && e.target.files[0];
