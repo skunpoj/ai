@@ -329,25 +329,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ensureRecordingTab(currentRecording);
         renderRecordingPanel(currentRecording);
 
-        // Insert an initial neutral placeholder row if not already present
-        try {
-            const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
-            if (tbody && !document.getElementById(`segrow-${currentRecording.id}-0`)) {
-                const tr = document.createElement('tr');
-                tr.id = `segrow-${currentRecording.id}-0`;
-                tr.innerHTML = `<td>recording…</td><td></td><td></td>`;
-                try {
-                    const services = await getServicesCached();
-                    services.filter(s => s.enabled).forEach(s => {
-                        const td = document.createElement('td');
-                        td.setAttribute('data-svc', s.key);
-                        td.textContent = '';
-                        tr.appendChild(td);
-                    });
-                } catch(_) {}
-                tbody.insertBefore(tr, tbody.firstChild);
-            }
-        } catch(_) {}
+        // No separate placeholder row; countdown pending row is used instead
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1, sampleRate: 48000 } });
