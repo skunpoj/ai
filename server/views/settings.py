@@ -90,12 +90,12 @@ def build_settings_modal() -> Any:
         provider_checks,
         Div(Button("OK", id="okSegmentModal"), style="text-align:center;margin-top:8px"),
         id="segmentModalContent",
-        style="background:#222;padding:16px;border:1px solid #444;max-width:820px;margin:10% auto",
+        style="background:#222;padding:16px;border:1px solid #444;max-width:960px;width:96vw;max-height:90vh;margin:5vh auto;overflow:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box",
     )
     modal = Div(
         content,
         id="segmentModal",
-        style="display:block;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999",
+        style="display:block;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;overflow:auto",
     )
     return modal
 

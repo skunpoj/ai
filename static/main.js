@@ -764,10 +764,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const testRecord2s = document.getElementById('testRecord2s');
         const testResults = document.getElementById('testResults');
         let testBlob = null;
-        // Load a built-in sample if present under static (optional)
+        // Load a built-in sample if present under static (optional), avoid 404 logs
         if (testAudio && !testAudio.src) {
-            // you can place a sample at /static/sample.ogg; if missing, ignore
-            testAudio.src = '/static/sample.ogg';
+            try {
+                const res = await fetch('/static/sample.ogg', { method: 'HEAD', cache: 'no-store' });
+                if (res.ok) testAudio.src = '/static/sample.ogg';
+            } catch(_) {}
         }
         if (testUpload) testUpload.addEventListener('change', async (e) => {
             try {
@@ -803,14 +805,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 const buf = await testBlob.arrayBuffer();
                 const b64 = arrayBufferToBase64(buf);
                 const mime = (testBlob.type || 'audio/webm');
-                if (testResults) testResults.textContent = 'Testing… (Google/Vertex/Gemini)';
-                const res = await fetch('/test_transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio_b64: b64, mime }) });
+                // determine selected providers (checked boxes)
+                const selected = [];
+                const labelMap = { google: 'Google', vertex: 'Vertex', gemini: 'Gemini', aws: 'AWS' };
+                const keys = ['google','vertex','gemini','aws'];
+                keys.forEach(k => { const el = document.getElementById(`svc_${k}`); if (el && el.checked) selected.push(k); });
+                const testingWhat = selected.length ? selected.map(k => labelMap[k] || k).join('/') : 'enabled providers';
+                if (testResults) testResults.textContent = `Testing… (${testingWhat})`;
+                const res = await fetch('/test_transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio_b64: b64, mime, services: selected.join(',') }) });
                 const data = await res.json();
                 if (data && data.ok) {
                     const parts = [];
-                    parts.push(`Google: ${data.results.google || data.results.google_error || 'n/a'}`);
-                    parts.push(`Vertex: ${data.results.vertex || data.results.vertex_error || 'n/a'}`);
-                    parts.push(`Gemini: ${data.results.gemini || data.results.gemini_error || 'n/a'}`);
+                    const want = selected.length ? selected : ['google','vertex','gemini','aws'];
+                    want.forEach(k => {
+                        const label = labelMap[k] || k;
+                        const val = (data.results && (data.results[k] || data.results[`${k}_error`])) || 'n/a';
+                        parts.push(`${label}: ${val}`);
+                    });
                     if (testResults) testResults.textContent = parts.join(' | ');
                 } else {
                     if (testResults) testResults.textContent = `Test failed: ${(data && data.error) || 'unknown'}`;
