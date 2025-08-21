@@ -3,6 +3,8 @@ import { getServicesCached } from '/static/ui/services.js';
 
 export function showPendingCountdown(recordId, segmentMs, isActiveFn, isRecordingFn) {
   try {
+    // Ensure only one countdown loop per recordId
+    window.__segCountdown = window.__segCountdown || { rafs: new Map(), cancels: new Map() };
     const ensureReady = (attempts = 0) => {
       const tbody = document.getElementById(`segtbody-${recordId}`);
       if (!tbody) {
@@ -23,6 +25,11 @@ export function showPendingCountdown(recordId, segmentMs, isActiveFn, isRecordin
         tbody.insertBefore(tr, tbody.firstChild);
       }
       const start = Date.now();
+      // Cancel any existing RAF loop for this recordId
+      try {
+        const prev = window.__segCountdown.rafs.get(recordId);
+        if (prev) cancelAnimationFrame(prev);
+      } catch(_) {}
       const tick = () => {
         const node = document.getElementById(pendingId);
         if (!node || !isActiveFn()) return;
@@ -30,9 +37,13 @@ export function showPendingCountdown(recordId, segmentMs, isActiveFn, isRecordin
         const remaining = Math.max(0, Math.ceil((segmentMs - elapsed) / 1000));
         const firstCell = node.firstChild;
         if (firstCell) firstCell.textContent = `Recording for ${remaining} seconds...`;
-        if (elapsed < segmentMs && isRecordingFn()) requestAnimationFrame(tick);
+        if (elapsed < segmentMs && isRecordingFn()) {
+          const id = requestAnimationFrame(tick);
+          window.__segCountdown.rafs.set(recordId, id);
+        }
       };
-      requestAnimationFrame(tick);
+      const id = requestAnimationFrame(tick);
+      window.__segCountdown.rafs.set(recordId, id);
     };
     ensureReady(0);
   } catch(_) {}
