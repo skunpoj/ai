@@ -144,8 +144,10 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     )
     # Player only (download available via browser control UI); keep size label
     player_bits: List[Any] = []
-    if record.get("audioUrl"):
-        player_bits.append(Audio(Source(src=record["audioUrl"], type="audio/webm"), controls=True))
+    # Prefer serverUrl so the playback points at a resolvable file immediately when available
+    src_url = record.get("serverUrl") or record.get("audioUrl")
+    if src_url:
+        player_bits.append(Audio(Source(src=src_url, type="audio/webm"), controls=True))
     # no explicit download link
     size_bytes = 0
     if isinstance(record.get("serverSizeBytes"), int) and record["serverSizeBytes"] > 0:
