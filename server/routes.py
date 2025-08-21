@@ -72,7 +72,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         return Td(txt)
 
     # Full record section (no 'Transcribing…' indicator)
-    full_header = Tr(*[Th(s["label"]) for s in services])
+    full_header = Tr(*[Th(s["label"], style="border:0") for s in services])
     # show size in first cell if serverUrl present (no explicit download link)
     first_cell_bits: List[Any] = []
     if record.get("serverUrl"):
@@ -113,7 +113,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     )
 
     # Segments table
-    seg_header = Tr(Th("Segment"), Th("Start"), Th("End"), *[Th(s["label"]) for s in services])
+    seg_header = Tr(Th("Segment", style="border:0"), Th("Start", style="border:0"), Th("End", style="border:0"), *[Th(s["label"], style="border:0") for s in services])
     seg_rows: List[Any] = []
     segments: List[Dict[str, Any]] = record.get("segments", []) or []
     transcripts: Dict[str, List[str]] = record.get("transcripts", {}) or {}
@@ -156,7 +156,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
             # Provide an optional button to force-load the entire file so browser download appears immediately
             if record.get("serverUrl"):
                 player_bits.append(Space(" "))
-                player_bits.append(Button("Load Full", id=f"loadFull-{record.get('id','')}", data_load_full=record.get("serverUrl")))
+                player_bits.append(Button("Load Full", id=f"loadFull-{record.get('id','')}", **{"data-load-full": record.get("serverUrl")}))
         except Exception:
             pass
     # no explicit download link
@@ -236,7 +236,7 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
             kb = int(seg["size"]/1024)
             try:
                 seg_cell_children.append(Space())
-                seg_cell_children.append(Small(f"({kb} KB)", id=f"segsize-{record.get('id','')}-{idx}", data_load_full=seg.get("url") or "", style="cursor:pointer"))
+                seg_cell_children.append(Small(f"({kb} KB)", id=f"segsize-{record.get('id','')}-{idx}", **{"data-load-full": (seg.get("url") or "")}, style="cursor:pointer"))
             except Exception:
                 seg_cell_children.append(Space(f" ({kb} KB)"))
     seg_cell = Td(*seg_cell_children)

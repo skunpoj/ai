@@ -76,7 +76,7 @@ export async function renderRecordingPanel(record) {
       <table border="0" cellpadding="4" cellspacing="0" style="border-collapse:collapse; border:0; width:100%">
         <thead>
           <tr>
-            ${services.map(s => `<th>${s.label}</th>`).join('')}
+            ${services.map(s => `<th style="border:0">${s.label}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -90,10 +90,10 @@ export async function renderRecordingPanel(record) {
       <table border="0" cellpadding="4" cellspacing="0" style="border-collapse:collapse; border:0; width:100%">
         <thead>
           <tr>
-            <th>Segment</th>
-            <th>Start</th>
-            <th>End</th>
-            ${services.map(s => `<th>${s.label}</th>`).join('')}
+            <th style="border:0">Segment</th>
+            <th style="border:0">Start</th>
+            <th style="border:0">End</th>
+            ${services.map(s => `<th style=\"border:0\">${s.label}</th>`).join('')}
           </tr>
         </thead>
         <tbody id="segtbody-${record.id}">

@@ -28,7 +28,7 @@ def build_settings_modal() -> Any:
     len_group = Div(first_row, second_row, id="segmentLenGroup")
 
     provider_checks = Div(
-        H3("Providers"),
+        # H3("Providers"),
         Div(
             Div(
                 Input(type="checkbox", id="svc_aws"),
@@ -65,9 +65,9 @@ def build_settings_modal() -> Any:
                 style="margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:8px"
             ),
             Hr(),
-            H3("Transcribe Test"),
+            # H3("Transcribe Test"),
+            Div(Audio(controls=True, id="testAudio", style="width:100%")),
             Div(
-                Audio(controls=True, id="testAudio", style="width:100%"),
                 Input(type="file", id="testUpload", accept="audio/*"),
                 Button("Record 2s", id="testRecord2s"),
                 Button("Transcribe Test", id="testRun"),
