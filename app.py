@@ -56,6 +56,12 @@ SEGMENT_MS = SEGMENT_MS_DEFAULT
 # Include HTMX SSE extension for server-sent events
 _HDRS = (Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"),)
 app, rt = fast_app(exts='ws', hdrs=_HDRS) # WS for audio; SSE for UI updates
+# Track active websockets for forced shutdown
+try:
+    if not hasattr(app.state, 'ws_clients'):
+        app.state.ws_clients = set()
+except Exception:
+    pass
 # Serve static from an absolute path to avoid CWD-related 404s
 _STATIC_DIR = os.path.join(_ROOT, "static")
 app.static_route_exts(prefix="/static", static_path=_STATIC_DIR) # Configure static files serving
@@ -139,9 +145,35 @@ def set_gemini_key(api_key: str = '') -> Any:
 async def ws_test(websocket: WebSocket):
     print("Backend: ENTERED /ws_stream function (audio streaming).") # CRITICAL TEST LOG
     try:
+        try:
+            app.state.ws_clients.add(websocket)
+        except Exception:
+            pass
         await ws_handler(websocket)
     except Exception as e:
         print(f"Error in ws_handler: {e}")
+    finally:
+        try:
+            app.state.ws_clients.discard(websocket)
+        except Exception:
+            pass
+
+# Force-close any lingering websockets on shutdown
+async def _close_all_ws():
+    try:
+        clients = list(getattr(app.state, 'ws_clients', set()))
+        for ws in clients:
+            try:
+                await ws.close(code=1001)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+try:
+    app.add_event_handler('shutdown', _close_all_ws)
+except Exception:
+    pass
 
 # Register HTMX partial endpoints here to avoid decorator dependency on 'rt' in server.routes
 @rt("/render/panel", methods=["GET","POST"])

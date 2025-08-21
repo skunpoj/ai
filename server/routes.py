@@ -201,7 +201,11 @@ def build_panel_html(record: Dict[str, Any]) -> str:
                     Tr(Td(H3("Full Record", style="margin:0;padding:0"), style="padding:0")),
                     Tr(Td(player_div, style="padding:0")),
                     Tr(Td(hdr, style="padding:0")),
-                )
+                ),
+                border="0",
+                cellpadding="0",
+                cellspacing="0",
+                style="border-collapse:collapse; border-spacing:0; border:0; width:100%"
             ),
             full_table
             ),
@@ -269,10 +273,16 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
     start_cell = Td(("" if not seg else ("" if not seg.get("startMs") else str(_fmt_time(seg["startMs"])))))
     end_cell = Td(("" if not seg else ("" if not seg.get("endMs") else str(_fmt_time(seg["endMs"])))))
     svc_cells = []
+    timeouts: Dict[str, List[bool]] = (record.get("timeouts") or {}) if isinstance(record, dict) else {}
     for s in services:
         arr = transcripts.get(s["key"], []) or []
         txt = arr[idx] if idx < len(arr) else ""
-        # show blank initially; timeouts will fill 'no result (timeout)' client-side
+        try:
+            to_arr = timeouts.get(s["key"], []) or []
+            if (not txt) and idx < len(to_arr) and to_arr[idx]:
+                txt = "no result (timeout)"
+        except Exception:
+            pass
         svc_cells.append(Td(txt or "", data_svc=s["key"]))
     import json as __json
     return Tr(

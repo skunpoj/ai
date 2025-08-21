@@ -15,7 +15,6 @@ import { ensureTab as ensureUITab } from '/static/ui/tabs.js';
  * @returns {Promise<void>} resolves after DOM is updated
  */
 export async function renderRecordingPanel(record) {
-  // Ensure a tab/panel exists for this record
   const tabsBar = document.getElementById('recordTabs');
   const panelsHost = document.getElementById('recordPanels');
   if (tabsBar && panelsHost) ensureUITab(tabsBar, panelsHost, record);
@@ -34,10 +33,8 @@ export async function renderRecordingPanel(record) {
   const downloadIcon = srcUrl ? `<a href="${srcUrl}" download title="Download" data-load-full="${srcUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : '';
   const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${downloadIcon} ${sizeHtml}`;
 
-  // Fetch current services dynamically from backend
   const services = (await getServices()).filter(s => !!s.enabled);
 
-  // Segments grid rows (descending order, newest first), with "transcribing…" placeholders
   let segRowsHtml = '';
   const presentIdx = [];
   for (let i = 0; i < record.segments.length; i++) if (record.segments[i]) presentIdx.push(i);
@@ -45,10 +42,10 @@ export async function renderRecordingPanel(record) {
   for (const i of presentIdx) {
     const seg = record.segments[i];
     const segMime = (seg && seg.url && seg.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
-    const sizeLabel = seg && seg.size ? bytesToLabel(seg.size) : '';
+    const sl = seg && seg.size ? bytesToLabel(seg.size) : '';
     const segUrl = seg && seg.url ? seg.url : '';
     const leftCells = `
-      <td>${segUrl ? `<audio controls><source src="${segUrl}" type="${segMime}"></audio>` : ''} ${segUrl ? `<a href="${segUrl}" download title="Download" data-load-full="${segUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : ''} ${sizeLabel ? `<small id="segsize-${record.id}-${i}" data-load-full="${segUrl}" style="cursor:pointer">(${sizeLabel})</small>` : ''}</td>
+      <td>${segUrl ? `<audio controls><source src="${segUrl}" type="${segMime}"></audio>` : ''} ${segUrl ? `<a href="${segUrl}" download title="Download" data-load-full="${segUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : ''} ${sl ? `<small id="segsize-${record.id}-${i}" data-load-full="${segUrl}" style="cursor:pointer">(${sl})</small>` : ''}</td>
       <td>${seg && seg.startMs ? formatElapsed(seg.startMs - (record.startTs || seg.startMs)) : ''}</td>
       <td>${seg && seg.endMs ? formatElapsed(seg.endMs - (record.startTs || seg.endMs)) : ''}</td>
     `;
@@ -62,20 +59,17 @@ export async function renderRecordingPanel(record) {
     const hxVals = JSON.stringify({ record: JSON.stringify(record), idx: i }).replace(/"/g, '&quot;');
     segRowsHtml += `<tr id="segrow-${record.id}-${i}" hx-post="/render/segment_row" hx-trigger="refresh-row" hx-target="this" hx-swap="outerHTML" hx-vals="${hxVals}">${leftCells}${svcCells}</tr>`;
   }
-  // If no segments yet, show a neutral placeholder row (no transcribing text yet)
-  // do not create neutral placeholder; pending countdown row is used during recording
 
-  // Full record comparison row: one cell per service
   const fullCells = services.map(svc => `<td data-svc="${svc.key}">${record.fullAppend[svc.key] || ''}</td>`).join('');
-
   const fullHxVals = JSON.stringify({ record: JSON.stringify(record) }).replace(/"/g, '&quot;');
+
   panel.innerHTML = `
     <div>
       <h3>Full Record</h3>
       <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
         <tbody>
-          <tr><td style="padding:0"><div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div></td></tr>
           <tr><td style="padding:0"><div style="margin-bottom:8px">${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}</div></td></tr>
+          <tr><td style="padding:0"><div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div></td></tr>
         </tbody>
       </table>
       <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
