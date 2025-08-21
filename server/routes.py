@@ -196,10 +196,11 @@ def build_panel_html(record: Dict[str, Any]) -> str:
 
     panel = Div(
         Div(
+            H3("Full Record"),
             Table(
-                Tbody(
-                    Tr(player_div),
-                    Tr(hdr),
+                TBody(
+                    Tr(Td(player_div, style="padding:0")),
+                    Tr(Td(hdr, style="padding:0")),
                 )
             ),
             full_table

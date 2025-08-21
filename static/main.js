@@ -596,6 +596,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             mediaRecorder.stop();
         }
+        // Clear any pending per-segment timeouts to avoid post-stop overrides
+        try {
+            transcribeTimeouts.forEach((to) => { try { clearTimeout(to); } catch(_) {} });
+            transcribeTimeouts.clear();
+        } catch(_) {}
         // Close socket after a short delay to allow final 'saved' message, then reopen on next start
         try {
             if (socket && socket.readyState === WebSocket.OPEN) {
@@ -877,7 +882,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     clearSvcTimeout(currentRecording.id, segIndex, svc);
                 } catch(_) {}
                 const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
-                if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
+                if (row && row.parentElement) {
+                    try { row.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex })); } catch(_) {}
+                    try { htmx.ajax('POST', '/render/segment_row', { target: row, values: { record: JSON.stringify(currentRecording), idx: segIndex }, swap: 'outerHTML' }); } catch(_) {}
+                }
             } catch(_) {}
         };
         es.addEventListener('segment_transcript_google', txHandler('google'));

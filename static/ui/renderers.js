@@ -74,7 +74,6 @@ export async function renderRecordingPanel(record) {
     </div>
     <div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div>
     <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
-      <h3>Full Record</h3>
       <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
         <thead>
           <tr>
