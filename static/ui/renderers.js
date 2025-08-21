@@ -30,7 +30,8 @@ export async function renderRecordingPanel(record) {
     : (typeof record.clientSizeBytes === 'number' ? bytesToLabel(record.clientSizeBytes) : '');
   const srcUrl = record.serverUrl || record.audioUrl || '';
   const mime = srcUrl.toLowerCase().endsWith('.ogg') ? 'audio/ogg' : 'audio/webm';
-  const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${sizeLabel ? `(${sizeLabel})` : ''}`;
+  const sizeHtml = (record.serverUrl && sizeLabel) ? `<small id="size-${record.id}" data-load-full="${record.serverUrl}" style="cursor:pointer">(${sizeLabel})</small>` : (sizeLabel ? `(${sizeLabel})` : '');
+  const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
 
   // Fetch current services dynamically from backend
   const services = (await getServices()).filter(s => !!s.enabled);
@@ -73,7 +74,7 @@ export async function renderRecordingPanel(record) {
     <div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div>
     <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
       <h3>Full Record</h3>
-      <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border:0; width:100%">
+      <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
         <thead>
           <tr>
             ${services.map(s => `<th style="border:0">${s.label}</th>`).join('')}
@@ -87,7 +88,7 @@ export async function renderRecordingPanel(record) {
     </div>
     <div style="margin-top:12px">
       <h3>Segments</h3>
-      <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border:0; width:100%">
+      <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
         <thead>
           <tr>
             <th style="border:0">Segment</th>
