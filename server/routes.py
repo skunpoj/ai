@@ -31,6 +31,11 @@ body { background:transparent; }
 table { border-collapse:collapse; border-spacing:0; width:100%; }
 th, td { padding:0; }
 hr { display:none; }
+/* Hide segment metadata (download + size) when toggled off */
+.hide-segmeta tbody[id^="segtbody-"] small[id^="segsize-"],
+.hide-segmeta tbody[id^="segtbody-"] a[download][data-load-full] {
+  display: none !important;
+}
         """), \
         Div(
             Div(
@@ -41,6 +46,8 @@ hr { display:none; }
             # Div(
                 Input(type="checkbox", id="autoTranscribeToggle", checked=True),
                 Label("Auto Transcribe", _for="autoTranscribeToggle"),
+                Input(type="checkbox", id="toggleSegMetaToolbar", checked=True),
+                Label("Show segment download & size", _for="toggleSegMetaToolbar"),
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
             ),
@@ -114,11 +121,27 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         style="margin-bottom:8px"
     )
     player_div = Div(*player_bits, style="margin-bottom:8px", id=f"recordmeta-{record.get('id','')}")
+    # Align header and playback with segment playback column by inserting three lead cells
     meta_table = Table(
         TBody(
-            Tr(Td(H3("Full Record", style="margin:0;padding:0"), style="padding:0")),
-            Tr(Td(hdr, style="padding:0")),
-            Tr(Td(player_div, style="padding:0")),
+            Tr(
+                Td("", style="padding:0"),
+                Td("", style="padding:0"),
+                Td("", style="padding:0"),
+                Td(H3("Full Record", style="margin:0;padding:0"), style="padding:0")
+            ),
+            Tr(
+                Td("", style="padding:0"),
+                Td("", style="padding:0"),
+                Td("", style="padding:0"),
+                Td(hdr, style="padding:0")
+            ),
+            Tr(
+                Td("", style="padding:0"),
+                Td("", style="padding:0"),
+                Td("", style="padding:0"),
+                Td(player_div, style="padding:0")
+            ),
         ),
         border="0",
         cellpadding="0",

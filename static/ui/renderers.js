@@ -65,11 +65,26 @@ export async function renderRecordingPanel(record) {
 
   panel.innerHTML = `
     <div>
-      <h3>Full Record</h3>
       <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
         <tbody>
-          <tr><td style="padding:0"><div style="margin-bottom:8px">${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}</div></td></tr>
-          <tr><td style="padding:0"><div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div></td></tr>
+          <tr>
+            <td style="padding:0"></td>
+            <td style="padding:0"></td>
+            <td style="padding:0"></td>
+            <td style="padding:0"><h3 style="margin:0;padding:0">Full Record</h3></td>
+          </tr>
+          <tr>
+            <td style="padding:0"></td>
+            <td style="padding:0"></td>
+            <td style="padding:0"></td>
+            <td style="padding:0"><div style="margin-bottom:8px">${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}</div></td>
+          </tr>
+          <tr>
+            <td style="padding:0"></td>
+            <td style="padding:0"></td>
+            <td style="padding:0"></td>
+            <td style="padding:0"><div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div></td>
+          </tr>
         </tbody>
       </table>
       <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">

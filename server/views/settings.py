@@ -55,6 +55,13 @@ def build_settings_modal() -> Any:
                 Small("", id="cred_gemini", style="margin-left:6px;color:#aaa"),
                 style="margin-bottom:8px"
             ),
+            Hr(),
+            H5("Display"),
+            Div(
+                Input(type="checkbox", id="toggleSegMeta", checked=True),
+                Label("Show segment download & size", _for="toggleSegMeta"),
+                style="margin-bottom:8px;display:flex;gap:8px;align-items:center"
+            ),
             Div(
                 Input(
                     type="text",

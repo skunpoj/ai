@@ -50,6 +50,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const segmentModal = document.getElementById('segmentModal');
     const okSegmentModalBtn = document.getElementById('okSegmentModal');
     const modelInfo = document.getElementById('modelInfo');
+    const toggleSegMeta = document.getElementById('toggleSegMeta');
+    const toggleSegMetaToolbar = document.getElementById('toggleSegMetaToolbar');
     const lblGoogle = document.getElementById('lbl_google');
     const lblVertex = document.getElementById('lbl_vertex');
     const lblGemini = document.getElementById('lbl_gemini');
@@ -199,6 +201,40 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     wireProviderModal();
+
+    // Display toggle: show/hide segment download & size labels
+    (function wireSegMetaToggle(){
+        try {
+            const key = 'ui.showSegMeta';
+            const apply = (on) => {
+                const root = document.documentElement || document.body;
+                if (!root) return;
+                if (on) root.classList.remove('hide-segmeta');
+                else root.classList.add('hide-segmeta');
+            };
+            const saved = localStorage.getItem(key);
+            const initial = saved === null ? true : (saved === 'true');
+            apply(initial);
+            if (toggleSegMeta) {
+                toggleSegMeta.checked = initial;
+                toggleSegMeta.addEventListener('change', () => {
+                    const on = !!toggleSegMeta.checked;
+                    localStorage.setItem(key, String(on));
+                    apply(on);
+                    if (toggleSegMetaToolbar) toggleSegMetaToolbar.checked = on;
+                });
+            }
+            if (toggleSegMetaToolbar) {
+                toggleSegMetaToolbar.checked = initial;
+                toggleSegMetaToolbar.addEventListener('change', () => {
+                    const on = !!toggleSegMetaToolbar.checked;
+                    localStorage.setItem(key, String(on));
+                    apply(on);
+                    if (toggleSegMeta) toggleSegMeta.checked = on;
+                });
+            }
+        } catch(_) {}
+    })();
 
     function timeoutKey(recordId, idx, svc) {
         return `${recordId}:${idx}:${svc}`;
