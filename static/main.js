@@ -311,8 +311,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         while (currentRecording.transcripts.google.length <= segIndex) currentRecording.transcripts.google.push('');
                         currentRecording.transcripts.google[segIndex] = data.transcript || '';
                         if (data.transcript) currentRecording.fullAppend.google = `${currentRecording.fullAppend.google}${currentRecording.fullAppend.google ? ' ' : ''}${data.transcript}`.trim();
-                        await refreshSegmentRow(currentRecording, segIndex);
-                        await refreshFullRow(currentRecording);
+                        // Client-side in-place update
+                        const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
+                        if (row) {
+                            const td = row.querySelector('td[data-svc="google"]');
+                            if (td) td.textContent = currentRecording.transcripts.google[segIndex] || '';
+                        }
+                        const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="google"]`);
+                        if (full) full.textContent = currentRecording.fullAppend.google || '';
                     }
                 } else if (data.type === 'segment_transcript_vertex') {
                     const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
@@ -323,8 +329,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         while (currentRecording.transcripts.vertex.length <= segIndex) currentRecording.transcripts.vertex.push('');
                         currentRecording.transcripts.vertex[segIndex] = data.transcript || '';
                         if (data.transcript) currentRecording.fullAppend.vertex = `${currentRecording.fullAppend.vertex}${currentRecording.fullAppend.vertex ? ' ' : ''}${data.transcript}`.trim();
-                        await refreshSegmentRow(currentRecording, segIndex);
-                        await refreshFullRow(currentRecording);
+                        const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
+                        if (row) {
+                            const td = row.querySelector('td[data-svc="vertex"]');
+                            if (td) td.textContent = currentRecording.transcripts.vertex[segIndex] || '';
+                        }
+                        const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="vertex"]`);
+                        if (full) full.textContent = currentRecording.fullAppend.vertex || '';
                     }
                 } else if (data.type === 'segment_transcript_gemini') {
                     const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
@@ -335,8 +346,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         while (currentRecording.transcripts.gemini.length <= segIndex) currentRecording.transcripts.gemini.push('');
                         currentRecording.transcripts.gemini[segIndex] = data.transcript || '';
                         if (data.transcript) currentRecording.fullAppend.gemini = `${currentRecording.fullAppend.gemini}${currentRecording.fullAppend.gemini ? ' ' : ''}${data.transcript}`.trim();
-                        await refreshSegmentRow(currentRecording, segIndex);
-                        await refreshFullRow(currentRecording);
+                        const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
+                        if (row) {
+                            const td = row.querySelector('td[data-svc="gemini"]');
+                            if (td) td.textContent = currentRecording.transcripts.gemini[segIndex] || '';
+                        }
+                        const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="gemini"]`);
+                        if (full) full.textContent = currentRecording.fullAppend.gemini || '';
                     }
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
@@ -345,7 +361,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (currentRecording) {
                         currentRecording.serverUrl = savedUrl;
                         if (typeof data.size === 'number') currentRecording.serverSizeBytes = data.size;
-                        await refreshFullRow(currentRecording);
+                        // Update download link and size inline
+                        const meta = document.getElementById(`recordmeta-${currentRecording.id}`);
+                        if (meta) {
+                            const sizeLabel = (currentRecording.serverSizeBytes ? currentRecording.serverSizeBytes : currentRecording.clientSizeBytes) || 0;
+                            meta.innerHTML = `${currentRecording.audioUrl ? `<audio controls src="${currentRecording.audioUrl}"></audio>` : ''} ${currentRecording.serverUrl ? `<a href="${currentRecording.serverUrl}" download>Download</a>` : ''}`;
+                        }
                     }
                     if (savedCloseTimer) {
                         clearTimeout(savedCloseTimer);
