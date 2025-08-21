@@ -19,7 +19,7 @@ if str(_ROOT) not in sys.path:
 from utils.credentials import ensure_google_credentials_from_env
 from server.config import CHUNK_MS, SEGMENT_MS_DEFAULT
 from server.state import app_state
-from server.routes import build_index, render_panel, render_segment_row, render_full_row
+from server.routes import build_index, render_panel, render_segment_row, render_full_row, _render_segment_row
 from server.ws import ws_handler
 from server.services.registry import list_services as registry_list, set_service_enabled
 from typing import Any, List, Dict
@@ -98,12 +98,32 @@ def render_panel_route(req: Any) -> Any:
     return render_panel(req)
 
 @rt("/render/segment_row", methods=["GET","POST"])
-def render_segment_row_route(req: Any) -> Any:
-    return render_segment_row(req)
+def render_segment_row_route(record: str = '', idx: int = 0) -> Any:
+    try:
+        rec = record if isinstance(record, dict) else (json.loads(record) if isinstance(record, str) and record else {})
+    except Exception:
+        rec = {}
+    try:
+        services = [s for s in registry_list() if s.get("enabled")]
+        row = _render_segment_row(rec, services, int(idx) if idx is not None else 0)
+        return HTMLResponse(str(row))
+    except Exception:
+        return HTMLResponse("<tr></tr>")
 
 @rt("/render/full_row", methods=["GET","POST"])
-def render_full_row_route(req: Any) -> Any:
-    return render_full_row(req)
+def render_full_row_route(record: str = '') -> Any:
+    try:
+        rec = record if isinstance(record, dict) else (json.loads(record) if isinstance(record, str) and record else {})
+    except Exception:
+        rec = {}
+    try:
+        services = [s for s in registry_list() if s.get("enabled")]
+        header = Tr(*[Th(s["label"]) for s in services])
+        row = Tr(*[Td(((rec.get("fullAppend", {}) or {}).get(s["key"], ""))) for s in services], id=f"fullrow-{rec.get('id','')}")
+        table = Table(THead(header), TBody(row), border="1", cellpadding="4", cellspacing="0", style="border-collapse:collapse; width:100%")
+        return HTMLResponse(str(table))
+    except Exception:
+        return HTMLResponse("<table></table>")
 
 serve()
 
