@@ -749,6 +749,45 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('beforeunload', () => { try { if (socket && socket.readyState === WebSocket.OPEN) socket.close(); } catch(_) {} });
     console.log('Frontend: DOMContentLoaded - Ready for interaction.');
 
+    // Delegate click handler to force-load full audio into a blob for immediate download availability
+    document.addEventListener('click', async (ev) => {
+        try {
+            const el = ev.target && ev.target.closest ? ev.target.closest('[data-load-full]') : null;
+            if (!el) return;
+            ev.preventDefault(); ev.stopPropagation();
+            const url = el.getAttribute('data-load-full') || '';
+            if (!url) return;
+            // show a lightweight loading hint
+            const prevText = el.textContent;
+            try { el.textContent = (prevText || '').replace(/\([^)]*\)/, '(loading…)') || 'loading…'; } catch(_) {}
+            const resp = await fetch(url, { cache: 'no-store' });
+            const blob = await resp.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            // find the nearest audio element in the same cell/container
+            let audio = null;
+            const td = el.closest ? el.closest('td') : null;
+            if (td) audio = td.querySelector('audio');
+            if (!audio) {
+                const parent = el.parentElement;
+                if (parent) audio = parent.querySelector('audio');
+            }
+            if (audio) {
+                // Prefer updating <source> child to keep type; fallback to audio.src
+                let srcEl = audio.querySelector('source');
+                const mime = resp.headers && resp.headers.get ? (resp.headers.get('Content-Type') || '') : '';
+                if (!srcEl) srcEl = document.createElement('source');
+                srcEl.src = objectUrl;
+                if (mime) srcEl.type = mime;
+                if (!audio.contains(srcEl)) {
+                    audio.innerHTML = '';
+                    audio.appendChild(srcEl);
+                }
+                try { audio.load(); } catch(_) {}
+            }
+            try { if (prevText) el.textContent = prevText; } catch(_) {}
+        } catch(_) {}
+    });
+
     // Wire SSE (Server-Sent Events) to trigger HTMX fragment refreshes
     try {
         const es = new EventSource('/events');
