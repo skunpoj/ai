@@ -796,7 +796,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (testRun) testRun.addEventListener('click', async () => {
             try {
                 if (!testBlob && testAudio && testAudio.src) {
-                    // fetch from audio element if playing a sample
                     const r = await fetch(testAudio.src);
                     testBlob = await r.blob();
                 }
@@ -804,17 +803,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 const buf = await testBlob.arrayBuffer();
                 const b64 = arrayBufferToBase64(buf);
                 const mime = (testBlob.type || 'audio/webm');
+                if (testResults) testResults.textContent = 'Testing… (Google/Vertex/Gemini)';
                 const res = await fetch('/test_transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio_b64: b64, mime }) });
                 const data = await res.json();
                 if (data && data.ok) {
                     const parts = [];
-                    if (data.results.google) parts.push(`Google: ${data.results.google}`);
-                    if (data.results.vertex) parts.push(`Vertex: ${data.results.vertex}`);
-                    if (data.results.gemini) parts.push(`Gemini: ${data.results.gemini}`);
-                    if (data.results.google_error) parts.push(`Google error: ${data.results.google_error}`);
-                    if (data.results.vertex_error) parts.push(`Vertex error: ${data.results.vertex_error}`);
-                    if (data.results.gemini_error) parts.push(`Gemini error: ${data.results.gemini_error}`);
-                    if (testResults) testResults.textContent = parts.join(' | ') || 'No result';
+                    parts.push(`Google: ${data.results.google || data.results.google_error || 'n/a'}`);
+                    parts.push(`Vertex: ${data.results.vertex || data.results.vertex_error || 'n/a'}`);
+                    parts.push(`Gemini: ${data.results.gemini || data.results.gemini_error || 'n/a'}`);
+                    if (testResults) testResults.textContent = parts.join(' | ');
                 } else {
                     if (testResults) testResults.textContent = `Test failed: ${(data && data.error) || 'unknown'}`;
                 }

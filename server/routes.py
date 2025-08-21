@@ -73,7 +73,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
 
     # Full record section (no 'Transcribing…' indicator)
     full_header = Tr(*[Th(s["label"]) for s in services])
-    # show download icon and size in first cell if serverUrl present
+    # show size in first cell if serverUrl present (no explicit download link)
     first_cell_bits: List[Any] = []
     if record.get("serverUrl"):
         human = ""
@@ -87,11 +87,11 @@ def build_panel_html(record: Dict[str, Any]) -> str:
                 human = f"({size} B)"
         except Exception:
             human = ""
-        first_cell_bits = [A("📥", href=record.get("serverUrl"), download=True, title="Download"), Space(" "), Small(human)]
+        first_cell_bits = [Small(human)]
     full_cells = []
     for s in services:
         val = ((record.get("fullAppend", {}) or {}).get(s["key"], ""))
-        # prepend download icon only in first service column
+        # prepend size label only in first service column
         if not full_cells and first_cell_bits:
             full_cells.append(Td(*first_cell_bits, data_svc=s["key"]))
         else:
@@ -142,13 +142,11 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         (f"Start: {_fmt_time(started)} · End: {_fmt_time(ended)} · Duration: {dur_s}s" if started and ended else ""),
         style="margin-bottom:8px"
     )
-    # Player + download
+    # Player only (download available via browser control UI); keep size label
     player_bits: List[Any] = []
     if record.get("audioUrl"):
         player_bits.append(Audio(Source(src=record["audioUrl"], type="audio/webm"), controls=True))
-    if record.get("serverUrl"):
-        player_bits.append(Space(" "))
-        player_bits.append(A("Download", href=record["serverUrl"], download=True))
+    # no explicit download link
     size_bytes = 0
     if isinstance(record.get("serverSizeBytes"), int) and record["serverSizeBytes"] > 0:
         size_bytes = record["serverSizeBytes"]
@@ -215,8 +213,6 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
     seg_cell_children: List[Any] = []
     if seg and seg.get("url"):
         seg_cell_children.append(Audio(Source(src=seg["url"], type=seg.get("mime") or "audio/webm"), controls=True))
-        seg_cell_children.append(Space(" "))
-        seg_cell_children.append(A("Download", href=seg["url"], download=True))
         if isinstance(seg.get("size"), int):
             kb = int(seg["size"]/1024)
             seg_cell_children.append(Space(f" ({kb} KB)"))

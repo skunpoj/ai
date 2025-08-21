@@ -19,57 +19,21 @@ Here is the plan to create the AI-generated business plan application:
 
 This application provides a web interface for transcribing audio to text using Google Cloud Speech-to-Text API.
 
-### Local Setup and Running
+### Run with Docker
 
-To run this application locally, follow these steps:
+Build and run using the included Dockerfile:
 
-1.  **Clone the repository (if you haven't already):**
-    ```bash
-    git clone <your-repository-url>
-    cd ai
-    ```
+```bash
+docker build -t live-transcribe .
+docker run -p 5001:5001 \
+  -e GOOGLE_APPLICATION_CREDENTIALS_JSON="$(cat /path/to/service_account_key.json)" \
+  -e GEMINI_API_KEY="YOUR_GEMINI_API_KEY_IF_USED" \
+  live-transcribe
+```
 
-2.  **Create a virtual environment (recommended):**
-    ```bash
-    python -m venv venv
-    ```
-
-3.  **Activate the virtual environment:**
-    *   **Windows (PowerShell):**
-        ```bash
-        .\venv\Scripts\Activate.ps1
-        ```
-    *   **Linux/macOS:**
-        ```bash
-        source venv/bin/activate
-        ```
-
-4.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-5.  **Set up Google Cloud Service Account Credentials:**
-    *   Obtain your Google Cloud service account JSON key file.
-    *   Save this file (e.g., `service_account_key.json`) in a secure location, preferably outside of your project directory for production, but for local testing, you can place it in your project root. **Remember to add `service_account_key.json` to your `.gitignore` file to prevent accidental commits.**
-    *   Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of your JSON key file.
-        *   **Windows (PowerShell):**
-            ```bash
-            $env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\your\service_account_key.json"
-            ```
-        *   **Linux/macOS:**
-            ```bash
-            export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/service_account_key.json"
-            ```
-        *   **Note:** This environment variable needs to be set in every new terminal session where you run the application.
-
-6.  **Run the FastHTML application:**
-    ```bash
-    python app.py
-    ```
-
-7.  **Access the application:**
-    Open your web browser and navigate to `http://localhost:5001`.
+Notes:
+- The container will write GOOGLE_APPLICATION_CREDENTIALS_JSON to a temp file and configure the Google SDKs automatically.
+- Set GEMINI_API_KEY if you want the consumer Gemini API in addition to Vertex.
 
 ### Running with Docker
 

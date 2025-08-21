@@ -28,7 +28,7 @@ export async function renderRecordingPanel(record) {
   const sizeLabel = (typeof record.serverSizeBytes === 'number' && record.serverSizeBytes > 0)
     ? bytesToLabel(record.serverSizeBytes)
     : (typeof record.clientSizeBytes === 'number' ? bytesToLabel(record.clientSizeBytes) : '');
-  const playerAndDownload = `${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''} ${record.serverUrl ? `<a href="${record.serverUrl}" download title="Download">📥</a>` : ''} ${sizeLabel ? `(${sizeLabel})` : ''}`;
+  const playerAndDownload = `${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''} ${sizeLabel ? `(${sizeLabel})` : ''}`;
 
   // Fetch current services dynamically from backend
   const services = (await getServices()).filter(s => !!s.enabled);
@@ -41,7 +41,7 @@ export async function renderRecordingPanel(record) {
   for (const i of presentIdx) {
     const seg = record.segments[i];
     const leftCells = `
-      <td>${seg ? `<audio controls src="${seg.url}"></audio>` : ''} ${seg && seg.url ? `<a href="${seg.url}" download>Download</a>` : ''} ${seg && seg.size ? `(${bytesToLabel(seg.size)})` : ''}</td>
+      <td>${seg ? `<audio controls src="${seg.url}"></audio>` : ''} ${seg && seg.size ? `(${bytesToLabel(seg.size)})` : ''}</td>
       <td>${seg && seg.startMs ? formatElapsed(seg.startMs - (record.startTs || seg.startMs)) : ''}</td>
       <td>${seg && seg.endMs ? formatElapsed(seg.endMs - (record.startTs || seg.endMs)) : ''}</td>
     `;
