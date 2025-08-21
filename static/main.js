@@ -276,10 +276,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     // Toggle service enabled state
                     try { await fetch('/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'gemini', enabled: true }) }); } catch(_) {}
                 } else {
-                    if (credGemini) credGemini.textContent = 'Gemini: key rejected';
+                    if (credGemini) credGemini.textContent = `Gemini: key error${data && data.error ? ` · ${data.error}` : ''}`;
                 }
             } catch (e) {
-                if (credGemini) credGemini.textContent = 'Gemini: key error';
+                if (credGemini) credGemini.textContent = `Gemini: key error · ${e && e.message ? e.message : 'network'}`;
             }
         });
     }
@@ -819,25 +819,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Manual connection check button (inside modal)
     if (testConnBtn) testConnBtn.addEventListener('click', async () => {
-        connStatus.innerText = 'WebSocket: connecting…';
+        const now = new Date().toLocaleTimeString();
+        connStatus.innerText = `WebSocket: connecting… (${now})`;
         await ensureSocketOpen();
         const start = Date.now();
         const handler = (ev) => {
             const rtt = Date.now() - start;
-            connStatus.innerText = `WebSocket: pong · ${rtt} ms`;
+            const responseTime = new Date().toLocaleTimeString();
+            connStatus.innerText = `WebSocket: connected · ${rtt} ms RTT · ${responseTime}`;
         };
         try {
             socket.addEventListener('message', function onmsg(e){
                 try { const m = JSON.parse(e.data); if (m && m.type === 'pong') { handler(); socket.removeEventListener('message', onmsg); } } catch(_) {}
             });
             socket.send(JSON.stringify({ type: 'ping' }));
-            connStatus.innerText = 'WebSocket: ping…';
+            const pingTime = new Date().toLocaleTimeString();
+            connStatus.innerText = `WebSocket: ping sent · ${pingTime}`;
             setTimeout(() => {
-                if (connStatus.innerText.startsWith('WebSocket: ping')) connStatus.innerText = 'WebSocket: no response';
+                if (connStatus.innerText.includes('ping sent')) {
+                    const timeoutTime = new Date().toLocaleTimeString();
+                    connStatus.innerText = `WebSocket: no response · timeout at ${timeoutTime}`;
+                }
             }, 3000);
         } catch (e) {
             console.warn('Frontend: ping send failed:', e);
-            connStatus.innerText = 'WebSocket: ping failed';
+            const errorTime = new Date().toLocaleTimeString();
+            connStatus.innerText = `WebSocket: ping failed · error at ${errorTime}`;
         }
     });
 

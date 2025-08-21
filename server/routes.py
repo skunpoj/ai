@@ -35,21 +35,36 @@ def build_segment_modal() -> Any:
     provider_checks = Div(
         H3("Providers"),
         Div(
-            Input(type="checkbox", id="svc_aws"),
-            Label("AWS (beta)", _for="svc_aws", id="lbl_aws", style="cursor:pointer"),
-            Small("", id="cred_aws", style="margin-left:6px;color:#aaa"),
-            Input(type="checkbox", id="svc_gemini"),
-            Label("Gemini API", _for="svc_gemini", id="lbl_gemini", style="cursor:pointer"),
-            Small("", id="cred_gemini", style="margin-left:6px;color:#aaa"),
-            Input(type="text", id="geminiApiKey", placeholder="Enter Gemini API Key", style="min-width:260px"),
-            Button("Use Key", id="useGeminiKey"),
-            Input(type="checkbox", id="svc_google"),
-            Label("Google STT", _for="svc_google", id="lbl_google", style="cursor:pointer"),
-            Small("", id="cred_google", style="margin-left:6px;color:#aaa"),
-            Input(type="checkbox", id="svc_vertex", checked=True),
-            Label("Gemini Vertex", _for="svc_vertex", id="lbl_vertex", style="cursor:pointer"),
-            Small("", id="cred_vertex", style="margin-left:6px;color:#aaa"),
-            id="providerCheckboxes", style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;row-gap:8px;margin-bottom:8px"
+            Div(
+                Input(type="checkbox", id="svc_aws"),
+                Label("AWS (beta)", _for="svc_aws", id="lbl_aws", style="cursor:pointer"),
+                Small("", id="cred_aws", style="margin-left:6px;color:#aaa"),
+                style="margin-bottom:8px"
+            ),
+            Div(
+                Input(type="checkbox", id="svc_google"),
+                Label("Google STT", _for="svc_google", id="lbl_google", style="cursor:pointer"),
+                Small("", id="cred_google", style="margin-left:6px;color:#aaa"),
+                style="margin-bottom:8px"
+            ),
+            Div(
+                Input(type="checkbox", id="svc_vertex", checked=True),
+                Label("Gemini Vertex", _for="svc_vertex", id="lbl_vertex", style="cursor:pointer"),
+                Small("", id="cred_vertex", style="margin-left:6px;color:#aaa"),
+                style="margin-bottom:8px"
+            ),
+            Div(
+                Input(type="checkbox", id="svc_gemini"),
+                Label("Gemini API", _for="svc_gemini", id="lbl_gemini", style="cursor:pointer"),
+                Small("", id="cred_gemini", style="margin-left:6px;color:#aaa"),
+                style="margin-bottom:8px"
+            ),
+            Div(
+                Input(type="text", id="geminiApiKey", placeholder="Enter Gemini API Key", style="min-width:200px;margin-right:8px"),
+                Button("Use Key", id="useGeminiKey"),
+                style="margin-bottom:8px;display:flex;align-items:center"
+            ),
+            id="providerCheckboxes"
         ),
         Div(Button("Check Connection", id="testConnection"), P("WebSocket: not connected", id="connStatus"))
     )
