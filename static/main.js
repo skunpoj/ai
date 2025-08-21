@@ -442,6 +442,15 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (msg.error) console.log(`[WS:${msg.type}] error`, msg.error);
                             if (!currentRecording) return;
                             const segIndex = (typeof msg.idx === 'number') ? msg.idx : msg.id;
+                            try {
+                                const svc = (msg.type || '').replace('segment_transcript_', '') || '';
+                                if (svc) {
+                                    const arr = (currentRecording.transcripts[svc] = currentRecording.transcripts[svc] || []);
+                                    while (arr.length <= segIndex) arr.push('');
+                                    if (typeof msg.transcript === 'string') arr[segIndex] = msg.transcript;
+                                    clearSvcTimeout(currentRecording.id, segIndex, svc);
+                                }
+                            } catch(_) {}
                             const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
                             if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
                         } catch(_) {}
@@ -861,6 +870,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
                 if (!currentRecording) return;
+                try {
+                    const arr = (currentRecording.transcripts[svc] = currentRecording.transcripts[svc] || []);
+                    while (arr.length <= segIndex) arr.push('');
+                    if (typeof data.transcript === 'string') arr[segIndex] = data.transcript;
+                    clearSvcTimeout(currentRecording.id, segIndex, svc);
+                } catch(_) {}
                 const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
                 if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
             } catch(_) {}
