@@ -68,6 +68,7 @@ export async function renderRecordingPanel(record) {
       ${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}
     </div>
     <div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div>
+    <div id="segcount-${record.id}" style="margin:4px 0 8px 0;color:#aaa"></div>
     <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
       <h3>Full Record</h3>
       <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse; width:100%">

@@ -96,42 +96,112 @@ class AppState:
     def init_gemini_api(self) -> None:
         """Initialize consumer Gemini API model if GEMINI_API_KEY is present."""
         gemini_api_key = os.environ.get("GEMINI_API_KEY")
-        if gemini_api_key and gm is not None:
-            try:
-                gm.configure(api_key=gemini_api_key)
-                self.gemini_model = gm.GenerativeModel("gemini-1.5-flash")
-                self.gemini_api_ready = True
-                self.gemini_api_key_masked = (gemini_api_key[:4] + "..." + gemini_api_key[-4:]) if len(gemini_api_key) >= 8 else "***"
-                print("Gemini model initialized for parallel transcription.")
-            except Exception as e:
-                print(f"Error initializing Gemini: {e}")
-                self.gemini_model = None
-                self.gemini_api_ready = False
+        # Prefer new google.genai SDK when available; fall back to google.generativeai
+        if gemini_api_key:
+            # Adapter for google.genai client to match .generate_content([...]) interface used elsewhere
+            class _GenaiConsumerAdapter:
+                def __init__(self, client, model_name: str):
+                    self._client = client
+                    self._model = model_name
+                def generate_content(self, contents):
+                    # Normalize contents into google.genai types when needed
+                    if genai_types is not None:
+                        normalized = []
+                        for part in contents or []:
+                            try:
+                                if isinstance(part, dict) and "mime_type" in part and "data" in part:
+                                    normalized.append(genai_types.Part.from_bytes(data=part["data"], mime_type=part["mime_type"]))
+                                elif isinstance(part, dict) and "text" in part:
+                                    normalized.append(part["text"])  # plain text
+                                else:
+                                    normalized.append(part)
+                            except Exception:
+                                normalized.append(part)
+                    else:
+                        normalized = contents
+                    return self._client.models.generate_content(model=self._model, contents=normalized)
+
+            # Try new SDK first
+            if genai_sdk is not None:
+                try:
+                    client = genai_sdk.Client(api_key=gemini_api_key)
+                    # Align with attached gemini.py default model name
+                    self.gemini_model = _GenaiConsumerAdapter(client, "gemini-2.5-flash")
+                    self.gemini_api_ready = True
+                    self.gemini_api_key_masked = (gemini_api_key[:4] + "..." + gemini_api_key[-4:]) if len(gemini_api_key) >= 8 else "***"
+                    print("Gemini (google.genai) initialized for parallel transcription.")
+                    return
+                except Exception as e:
+                    print(f"Error initializing Gemini via google.genai: {e}")
+                    self.gemini_model = None
+                    self.gemini_api_ready = False
+
+            # Fallback to legacy google-generativeai SDK
+            if gm is not None:
+                try:
+                    gm.configure(api_key=gemini_api_key)
+                    self.gemini_model = gm.GenerativeModel("gemini-2.5-flash")
+                    self.gemini_api_ready = True
+                    self.gemini_api_key_masked = (gemini_api_key[:4] + "..." + gemini_api_key[-4:]) if len(gemini_api_key) >= 8 else "***"
+                    print("Gemini (google-generativeai) initialized for parallel transcription.")
+                except Exception as e:
+                    print(f"Error initializing Gemini via google-generativeai: {e}")
+                    self.gemini_model = None
+                    self.gemini_api_ready = False
+            else:
+                # Key provided but no supported SDK available
+                if genai_sdk is None:
+                    print("Neither google.genai nor google-generativeai installed; skipping Gemini parallel transcription.")
         else:
-            if not gemini_api_key:
-                print("GEMINI_API_KEY not set; skipping Gemini parallel transcription.")
-            if gm is None:
-                print("google-generativeai not installed; skipping Gemini parallel transcription.")
+            # No key provided
+            print("GEMINI_API_KEY not set; skipping Gemini parallel transcription.")
 
     def set_gemini_api_key(self, api_key: str) -> bool:
         """Dynamically configure Gemini consumer API with a provided key."""
-        if gm is None:
-            self.gemini_model = None
-            self.gemini_api_ready = False
-            self.gemini_api_key_masked = ""
-            return False
-        try:
-            gm.configure(api_key=api_key)
-            self.gemini_model = gm.GenerativeModel("gemini-1.5-flash")
-            self.gemini_api_ready = True
-            self.gemini_api_key_masked = (api_key[:4] + "..." + api_key[-4:]) if isinstance(api_key, str) and len(api_key) >= 8 else "***"
-            return True
-        except Exception as e:
-            print(f"Error setting Gemini API key: {e}")
-            self.gemini_model = None
-            self.gemini_api_ready = False
-            self.gemini_api_key_masked = ""
-            return False
+        # Try new google.genai first
+        if genai_sdk is not None:
+            try:
+                client = genai_sdk.Client(api_key=api_key)
+                class _GenaiConsumerAdapter:
+                    def __init__(self, client, model_name: str):
+                        self._client = client
+                        self._model = model_name
+                    def generate_content(self, contents):
+                        if genai_types is not None:
+                            normalized = []
+                            for part in contents or []:
+                                try:
+                                    if isinstance(part, dict) and "mime_type" in part and "data" in part:
+                                        normalized.append(genai_types.Part.from_bytes(data=part["data"], mime_type=part["mime_type"]))
+                                    elif isinstance(part, dict) and "text" in part:
+                                        normalized.append(part["text"])  # plain text
+                                    else:
+                                        normalized.append(part)
+                                except Exception:
+                                    normalized.append(part)
+                        else:
+                            normalized = contents
+                        return self._client.models.generate_content(model=self._model, contents=normalized)
+                self.gemini_model = _GenaiConsumerAdapter(client, "gemini-2.5-flash")
+                self.gemini_api_ready = True
+                self.gemini_api_key_masked = (api_key[:4] + "..." + api_key[-4:]) if isinstance(api_key, str) and len(api_key) >= 8 else "***"
+                return True
+            except Exception as e:
+                print(f"Error setting Gemini API key via google.genai: {e}")
+                # fall through to legacy
+        if gm is not None:
+            try:
+                gm.configure(api_key=api_key)
+                self.gemini_model = gm.GenerativeModel("gemini-2.5-flash")
+                self.gemini_api_ready = True
+                self.gemini_api_key_masked = (api_key[:4] + "..." + api_key[-4:]) if isinstance(api_key, str) and len(api_key) >= 8 else "***"
+                return True
+            except Exception as e:
+                print(f"Error setting Gemini API key via google-generativeai: {e}")
+        self.gemini_model = None
+        self.gemini_api_ready = False
+        self.gemini_api_key_masked = ""
+        return False
 
     def init_vertex(self) -> None:
         """Initialize Vertex GenAI SDK client using service account."""

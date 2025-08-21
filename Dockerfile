@@ -1,5 +1,5 @@
 # Use a Python base image
-FROM python:3.10-slim-bullseye
+FROM python:3.11-slim
 
 # Set the working directory
 WORKDIR /app
@@ -8,11 +8,12 @@ WORKDIR /app
 COPY requirements.txt .
 # Install CA certificates to fix TLS verification for Google APIs
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
 # Copy the entire application code (includes server/, utils/, static/, etc.)
 COPY . .

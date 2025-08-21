@@ -139,7 +139,7 @@ While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` en
 
 - app.py: boots the app, loads credentials (via `utils/credentials.py`), initializes provider state (`server/state.py`), and wires routes and WebSocket.
 - server/config.py: constants (CHUNK_MS, SEGMENT_MS_DEFAULT, language, etc.).
-- server/state.py: initializes and stores provider clients (Google STT, Gemini API, Vertex) with masked auth info for UI.
+- server/state.py: initializes and stores provider clients (Google STT, Gemini API, Vertex) with masked auth info for UI. Uses google.genai (preferred) for Gemini API if present, otherwise falls back to google-generativeai. Default model: `gemini-2.5-flash`.
 - server/routes.py: builds the index page; exposes `GET /services` for dynamic columns.
 - server/ws.py: handles WebSocket for audio segments, full upload, and dispatches to enabled providers.
 - server/services/
@@ -149,14 +149,18 @@ While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` en
   - aws_transcribe.py: AWS Transcribe scaffold (S3/streaming to be implemented)
   - registry.py: runtime registry; toggle services via `POST /services {key, enabled}`
 - static/
-  - main.js: UI logic (tabs per recording, segments grid, fetching services)
+  - main.js: UI logic (tabs per recording, segments grid, fetching services). Shows live "Recording for X seconds" countdown during segment capture and emits rich console logs for API status and errors.
   - audio/pcm-worklet.js: AudioWorkletNode processor for PCM16 capture
   - ui/services.js: fetches `/services`
   - ui/format.js, ui/tabs.js: utilities
 
-### Admin toggles
+### Settings
 
-The index page includes an Admin section (service toggles) that calls `POST /services` to enable/disable providers at runtime. The frontend then re-renders using `GET /services` to build columns dynamically.
+The index page includes a "Settings" modal with:
+- Segment length selection (5s–300s)
+- Provider toggles (Google STT, Gemini Vertex, Gemini API, AWS beta)
+- Gemini API key input with Apply button
+These call `POST /services` and `/gemini_api_key` and the UI re-renders columns dynamically.
 
 ### Frontend lint/format (optional)
 
@@ -225,7 +229,7 @@ To run Gemini using your service account (no API key), enable the Vertex AI SDK 
      export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service_account_key.json"
      ```
 
-With these set, the backend will prefer Vertex AI Gemini for per-segment transcription and fall back to Google consumer `google-generativeai` only if `GEMINI_API_KEY` is set and Vertex isn’t configured.
+With these set, the backend will use Vertex AI Gemini via the Google GenAI SDK. LangChain is also supported via `langchain-google-vertexai` where applicable, but audio transcription currently goes through the SDK's `models.generate_content` path for reliability.
 
 ### Provider troubleshooting and setup
 
@@ -235,11 +239,13 @@ Google Cloud Speech-to-Text
 
 Gemini (API)
 - Set `GEMINI_API_KEY` to enable the consumer Gemini API model.
+- The app prefers the new `google.genai` SDK; if unavailable it falls back to `google-generativeai`.
 - If not set, the app skips Gemini API, and only Vertex/Google run.
 
 Vertex Gemini
 - Set `GOOGLE_CLOUD_PROJECT` and optionally `GOOGLE_CLOUD_LOCATION` (defaults to `us-central1`).
 - Requires service account with Vertex permissions; the project id is inferred from the service account if not set.
+- The app dispatches per-segment transcription when Vertex is enabled in Settings.
 
 AWS Transcribe (planned)
 - Set `AWS_TRANSCRIBE_ENABLED=true` to show the AWS column (scaffold only).

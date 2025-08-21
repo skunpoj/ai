@@ -270,7 +270,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!key) return;
             try {
                 const res = await fetch('/gemini_api_key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: key }) });
-                const data = await res.json();
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (e) {
+                    console.warn('Frontend: non-JSON response from /gemini_api_key');
+                    data = { ok: false, error: 'non_json_response' };
+                }
                 if (data && data.ok) {
                     if (credGemini) credGemini.textContent = `Gemini: ready · ${data.masked || ''}`;
                     // Toggle service enabled state
@@ -707,6 +713,23 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (segmentLoopActive) setTimeout(loopOnce, 0);
                     };
                     try { segmentRecorder.start(); } catch (e) { console.warn('Frontend: segmentRecorder start failed:', e); segmentLoopActive = false; return; }
+                    // Live countdown for this segment
+                    try {
+                        const countdownEl = document.getElementById(`segcount-${currentRecording.id}`);
+                        if (countdownEl) {
+                            const start = Date.now();
+                            const tick = () => {
+                                if (!segmentLoopActive || !countdownEl) return;
+                                const elapsed = Date.now() - start;
+                                const remaining = Math.max(0, Math.ceil((segmentMs - elapsed) / 1000));
+                                countdownEl.textContent = `Recording for ${remaining} seconds...`;
+                                if (elapsed < segmentMs && segmentRecorder && segmentRecorder.state === 'recording') {
+                                    requestAnimationFrame(tick);
+                                }
+                            };
+                            requestAnimationFrame(tick);
+                        }
+                    } catch(_) {}
                     setTimeout(() => { try { if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch (_) {} }, segmentMs);
                 };
                 loopOnce();

@@ -157,6 +157,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                             asyncio.create_task(do_google(segment_index, seg_bytes, seg_ext))
                         # Dispatch Vertex per-segment if available
                         if transcribe_enabled and service_enabled("vertex") and app_state.vertex_client is not None:
+                            print(f"WS dispatch: vertex idx={segment_index} ext={seg_ext}")
                             async def do_vertex(idx: int, b: bytes, ext: str):
                                 try:
                                     order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
@@ -188,6 +189,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                             asyncio.create_task(do_vertex(segment_index, seg_bytes, seg_ext))
                         # Dispatch Gemini API per-segment if available
                         if transcribe_enabled and service_enabled("gemini") and app_state.gemini_model is not None:
+                            print(f"WS dispatch: gemini idx={segment_index} ext={seg_ext}")
                             async def do_gemini(idx: int, b: bytes, ext: str):
                                 try:
                                     order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
@@ -213,6 +215,7 @@ async def ws_handler(websocket: WebSocket) -> None:
 
                         # Dispatch AWS Transcribe (placeholder) if enabled and available
                         if transcribe_enabled and service_enabled("aws") and aws_transcribe.is_available():
+                            print(f"WS dispatch: aws idx={segment_index} ext={seg_ext}")
                             async def do_aws(idx: int, b: bytes, ext: str):
                                 try:
                                     # Placeholder returns empty string; can be expanded to S3+job flow
