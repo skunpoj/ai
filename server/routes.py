@@ -196,9 +196,9 @@ def build_panel_html(record: Dict[str, Any]) -> str:
 
     panel = Div(
         Div(
-            H3("Full Record"),
             Table(
                 TBody(
+                    Tr(Td(H3("Full Record", style="margin:0;padding:0"), style="padding:0")),
                     Tr(Td(player_div, style="padding:0")),
                     Tr(Td(hdr, style="padding:0")),
                 )
@@ -253,6 +253,11 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
     seg_cell_children: List[Any] = []
     if seg and seg.get("url"):
         seg_cell_children.append(Audio(Source(src=seg["url"], type=seg.get("mime") or "audio/webm"), controls=True))
+        try:
+            seg_cell_children.append(Space())
+            seg_cell_children.append(A("📥", href=seg.get("url") or "", download=True, title="Download", **{"data-load-full": seg.get("url") or ""}, style="cursor:pointer;text-decoration:none"))
+        except Exception:
+            pass
         if isinstance(seg.get("size"), int):
             kb = int(seg["size"]/1024)
             try:

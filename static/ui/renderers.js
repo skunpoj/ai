@@ -30,8 +30,8 @@ export async function renderRecordingPanel(record) {
     : (typeof record.clientSizeBytes === 'number' ? bytesToLabel(record.clientSizeBytes) : '');
   const srcUrl = record.serverUrl || record.audioUrl || '';
   const mime = srcUrl.toLowerCase().endsWith('.ogg') ? 'audio/ogg' : 'audio/webm';
-  const sizeHtml = (record.serverUrl && sizeLabel) ? `<small id="size-${record.id}" data-load-full="${record.serverUrl}" style="cursor:pointer">(${sizeLabel})</small>` : (sizeLabel ? `(${sizeLabel})` : '');
-  const downloadIcon = record.serverUrl ? `<a href="${record.serverUrl}" download title="Download" data-load-full="${record.serverUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : '';
+  const sizeHtml = sizeLabel ? `<small id="size-${record.id}" data-load-full="${srcUrl}" style="cursor:pointer">(${sizeLabel})</small>` : '';
+  const downloadIcon = srcUrl ? `<a href="${srcUrl}" download title="Download" data-load-full="${srcUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : '';
   const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${downloadIcon} ${sizeHtml}`;
 
   // Fetch current services dynamically from backend
@@ -46,8 +46,9 @@ export async function renderRecordingPanel(record) {
     const seg = record.segments[i];
     const segMime = (seg && seg.url && seg.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
     const sizeLabel = seg && seg.size ? bytesToLabel(seg.size) : '';
+    const segUrl = seg && seg.url ? seg.url : '';
     const leftCells = `
-      <td>${seg && seg.url ? `<audio controls><source src="${seg.url}" type="${segMime}"></audio>` : ''} ${sizeLabel ? `<small id="segsize-${record.id}-${i}" data-load-full="${seg && seg.url ? seg.url : ''}" style="cursor:pointer">(${sizeLabel})</small>` : ''}</td>
+      <td>${segUrl ? `<audio controls><source src="${segUrl}" type="${segMime}"></audio>` : ''} ${segUrl ? `<a href="${segUrl}" download title="Download" data-load-full="${segUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : ''} ${sizeLabel ? `<small id="segsize-${record.id}-${i}" data-load-full="${segUrl}" style="cursor:pointer">(${sizeLabel})</small>` : ''}</td>
       <td>${seg && seg.startMs ? formatElapsed(seg.startMs - (record.startTs || seg.startMs)) : ''}</td>
       <td>${seg && seg.endMs ? formatElapsed(seg.endMs - (record.startTs || seg.endMs)) : ''}</td>
     `;
@@ -69,22 +70,26 @@ export async function renderRecordingPanel(record) {
 
   const fullHxVals = JSON.stringify({ record: JSON.stringify(record) }).replace(/"/g, '&quot;');
   panel.innerHTML = `
-    <div style="margin-bottom:8px">
-      ${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}
-    </div>
-    <div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div>
-    <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
+    <div>
+      <h3>Full Record</h3>
       <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
-        <thead>
-          <tr>
-            ${services.map(s => `<th style="border:0">${s.label}</th>`).join('')}
-          </tr>
-        </thead>
         <tbody>
-          <tr>${fullCells}</tr>
+          <tr><td style="padding:0"><div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div></td></tr>
+          <tr><td style="padding:0"><div style="margin-bottom:8px">${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}</div></td></tr>
         </tbody>
       </table>
-      
+      <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
+        <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
+          <thead>
+            <tr>
+              ${services.map(s => `<th style="border:0">${s.label}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>${fullCells}</tr>
+          </tbody>
+        </table>
+      </div>
     </div>
     <div style="margin-top:12px">
       <h3>Segments</h3>
