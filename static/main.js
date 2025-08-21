@@ -4,7 +4,7 @@ import { bytesToLabel } from '/static/ui/format.js';
 import { ensureTab as ensureUITab, activateTab as activateUITab } from '/static/ui/tabs.js';
 import { renderRecordingPanel as renderPanel } from '/static/ui/renderers.js';
 import { buildWSUrl, parseWSMessage, sendJSON, arrayBufferToBase64, ensureOpenSocket } from '/static/ui/ws.js';
-import { showPendingCountdown, prependSegmentRow, refreshFullRow, refreshSegmentRow } from '/static/ui/segments.js';
+import { showPendingCountdown, prependSegmentRow } from '/static/ui/segments.js';
 import { setButtonsOnStart, setButtonsOnStop } from '/static/ui/recording.js';
 
 // Main frontend controller: wires recording controls, websocket, segments loop,
@@ -423,218 +423,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 socket.addEventListener('open', onSocketReady, { once: true });
             }
 
-            // WebSocket message handler: updates UI and recording state
-            socket.onmessage = async event => {
-                console.log('Frontend: Received WebSocket message:', event.data);
-                const data = parseWSMessage(event);
-                if (!data) return;
-                console.log('Frontend: Parsed WebSocket data:', data);
-
-                if (data.type === "ready") {
-                    console.log('Frontend: Backend ready signal received. Recorder status:', mediaRecorder.state);
-                    try {
-                        sendJSON(socket, { type: 'ping_start' });
-                        console.log('Frontend: Sent ping_start.');
-                    } catch (e) {
-                        console.warn('Frontend: Failed to send ping_start:', e);
-                    }
-                    // Ensure auto transcribe engages after backend signals ready
-                    if (autoTranscribeToggle && autoTranscribeToggle.checked) {
-                        try { sendJSON(socket, { type: 'transcribe', enabled: true }); } catch (_) {}
-                        if (startTranscribeButton && stopTranscribeButton) {
-                            startTranscribeButton.style.display = 'none';
-                            stopTranscribeButton.style.display = 'none';
-                        }
-                    }
-                    // Ensure we have a current recording created on start; just refresh UI
-                    ensureRecordingTab(currentRecording);
-                    renderRecordingPanel(currentRecording);
-                } else if (data.transcript && typeof data.is_final !== 'undefined') {
-                    // Live Google streaming transcript (append-only)
-                    const line = document.createElement('div');
-                    const prefix = data.is_final ? 'Google Live Final:' : 'Google Live:';
-                    line.textContent = `${prefix} ${data.transcript}`;
-                    if (liveTranscriptContainer) liveTranscriptContainer.appendChild(line);
-                    if (currentRecording && data.is_final) {
-                        currentRecording.transcripts.googleLive.push(data.transcript);
-                        currentRecording.fullAppend.googleLive = `${currentRecording.fullAppend.googleLive}${currentRecording.fullAppend.googleLive ? ' ' : ''}${data.transcript}`;
-                        renderRecordingPanel(currentRecording);
-                    }
-                } else if (data.type === 'chunk_saved' || data.type === 'chunk_transcript') {
-                    // Ignore chunk UI updates; chunks are internal
-                } else if (data.type === 'segment_saved') {
-                    // Render single server-hosted playable audio per segment
-                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                    const mime = (typeof data.mime === 'string' && data.mime) ? data.mime : (String(data.url).endsWith('.ogg') ? 'audio/ogg' : 'audio/webm');
-                    if (currentRecording) {
-                        while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
-                        const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
-                        const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
-                        currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime, size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
-                        // Insert or update row at top without reloading the whole table
-                        const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
-                        const rowId = `segrow-${currentRecording.id}-${segIndex}`;
-                        const existing = document.getElementById(rowId);
-                        if (tbody && !existing) {
-                            // Build a minimal row with placeholders and prepend
-                            const tr = await prependSegmentRow(currentRecording, segIndex, data, startMs, endMs);
-                            // Schedule timeouts per enabled service so placeholders don't stay forever
-                            scheduleSegmentTimeouts(currentRecording.id, segIndex);
-                            // Remove the initial placeholder if present
-                            const ph = document.getElementById(`segrow-${currentRecording.id}-0`);
-                            if (ph && ph.firstChild && ph.firstChild.textContent === 'recording…') {
-                                try { tbody.removeChild(ph); } catch(_) {}
-                            }
-                        } else {
-                            await refreshSegmentRow(currentRecording, segIndex);
-                            setTimeout(() => scheduleSegmentTimeouts(currentRecording.id, segIndex), 60);
-                        }
-                    }
-                } else if (data.type === 'segment_transcript' || data.type === 'segment_transcript_google') {
-                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                    const key = `google:${segIndex}:${data.transcript || ''}`;
-                    if (seenTxKeys.has(key)) return;
-                    seenTxKeys.add(key);
-                    if (currentRecording) {
-                        while (currentRecording.transcripts.google.length <= segIndex) currentRecording.transcripts.google.push('');
-                        currentRecording.transcripts.google[segIndex] = data.transcript || '';
-                        if (data.transcript) currentRecording.fullAppend.google = `${currentRecording.fullAppend.google}${currentRecording.fullAppend.google ? ' ' : ''}${data.transcript}`.trim();
-                        // Client-side in-place update
-                        const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
-                        if (row) {
-                            const td = row.querySelector('td[data-svc="google"]');
-                            if (td) td.textContent = (currentRecording.transcripts.google[segIndex] || '').trim() || '...';
-                        }
-                        clearSvcTimeout(currentRecording.id, segIndex, 'google');
-                        if (currentRecording && currentRecording.timeouts && currentRecording.timeouts.google) {
-                            while (currentRecording.timeouts.google.length <= segIndex) currentRecording.timeouts.google.push(false);
-                            currentRecording.timeouts.google[segIndex] = false;
-                        }
-                        const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="google"]`);
-                        if (full) {
-                            full.textContent = currentRecording.fullAppend.google || '';
-                            const fs = document.getElementById(`fullstatus-${currentRecording.id}`);
-                            if (fs) fs.style.display = 'none';
-                        }
-                    }
-                } else if (data.type === 'segment_transcript_vertex') {
-                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                    const key = `vertex:${segIndex}:${data.transcript || ''}`;
-                    if (seenTxKeys.has(key)) return;
-                    seenTxKeys.add(key);
-                    if (currentRecording) {
-                        while (currentRecording.transcripts.vertex.length <= segIndex) currentRecording.transcripts.vertex.push('');
-                        currentRecording.transcripts.vertex[segIndex] = data.transcript || '';
-                        if (data.transcript) currentRecording.fullAppend.vertex = `${currentRecording.fullAppend.vertex}${currentRecording.fullAppend.vertex ? ' ' : ''}${data.transcript}`.trim();
-                        const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
-                        if (row) {
-                            const td = row.querySelector('td[data-svc="vertex"]');
-                            if (td) td.textContent = (currentRecording.transcripts.vertex[segIndex] || '').trim() || '...';
-                        }
-                        clearSvcTimeout(currentRecording.id, segIndex, 'vertex');
-                        if (currentRecording && currentRecording.timeouts && currentRecording.timeouts.vertex) {
-                            while (currentRecording.timeouts.vertex.length <= segIndex) currentRecording.timeouts.vertex.push(false);
-                            currentRecording.timeouts.vertex[segIndex] = false;
-                        }
-                        const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="vertex"]`);
-                        if (full) {
-                            full.textContent = currentRecording.fullAppend.vertex || '';
-                            const fs = document.getElementById(`fullstatus-${currentRecording.id}`);
-                            if (fs) fs.style.display = 'none';
-                        }
-                    }
-                } else if (data.type === 'segment_transcript_gemini') {
-                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                    const key = `gemini:${segIndex}:${data.transcript || ''}`;
-                    if (seenTxKeys.has(key)) return;
-                    seenTxKeys.add(key);
-                    if (currentRecording) {
-                        while (currentRecording.transcripts.gemini.length <= segIndex) currentRecording.transcripts.gemini.push('');
-                        currentRecording.transcripts.gemini[segIndex] = data.transcript || '';
-                        if (data.transcript) currentRecording.fullAppend.gemini = `${currentRecording.fullAppend.gemini}${currentRecording.fullAppend.gemini ? ' ' : ''}${data.transcript}`.trim();
-                        const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
-                        if (row) {
-                            const td = row.querySelector('td[data-svc="gemini"]');
-                            if (td) td.textContent = (currentRecording.transcripts.gemini[segIndex] || '').trim() || '...';
-                        }
-                        clearSvcTimeout(currentRecording.id, segIndex, 'gemini');
-                        if (currentRecording && currentRecording.timeouts && currentRecording.timeouts.gemini) {
-                            while (currentRecording.timeouts.gemini.length <= segIndex) currentRecording.timeouts.gemini.push(false);
-                            currentRecording.timeouts.gemini[segIndex] = false;
-                        }
-                        const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="gemini"]`);
-                        if (full) {
-                            full.textContent = currentRecording.fullAppend.gemini || '';
-                            const fs = document.getElementById(`fullstatus-${currentRecording.id}`);
-                            if (fs) fs.style.display = 'none';
-                        }
-                    }
-                } else if (data.type === 'segment_transcript_aws') {
-                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                    const key = `aws:${segIndex}:${data.transcript || ''}`;
-                    if (seenTxKeys.has(key)) return;
-                    seenTxKeys.add(key);
-                    if (currentRecording) {
-                        currentRecording.transcripts.aws = currentRecording.transcripts.aws || [];
-                        while (currentRecording.transcripts.aws.length <= segIndex) currentRecording.transcripts.aws.push('');
-                        currentRecording.transcripts.aws[segIndex] = data.transcript || '';
-                        const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
-                        if (row) {
-                            const td = row.querySelector('td[data-svc="aws"]');
-                            if (td) td.textContent = (currentRecording.transcripts.aws[segIndex] || '').trim() || '...';
-                        }
-                        clearSvcTimeout(currentRecording.id, segIndex, 'aws');
-                        if (currentRecording && currentRecording.timeouts && currentRecording.timeouts.aws) {
-                            while (currentRecording.timeouts.aws.length <= segIndex) currentRecording.timeouts.aws.push(false);
-                            currentRecording.timeouts.aws[segIndex] = false;
-                        }
-                    }
-                } else if (data.type === 'saved') {
-                    // Server finalized and saved the recording file
-                    const savedUrl = data.url;
-                    console.log('Frontend: Server saved recording at:', savedUrl);
-                    // Prefer active record; fallback to last known or most recent
-                    const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || recordings[recordings.length - 1]);
-                    if (rec) {
-                        rec.serverUrl = savedUrl;
-                        if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
-                        // Update download link and size inline for this record panel
-                        const meta = document.getElementById(`recordmeta-${rec.id}`);
-                        if (meta) {
-                            const size = (typeof rec.serverSizeBytes === 'number' && rec.serverSizeBytes > 0) ? rec.serverSizeBytes : rec.clientSizeBytes || 0;
-                            const human = size >= 1048576 ? `${(size/1048576).toFixed(1)} MB` : (size >= 1024 ? `${Math.round(size/1024)} KB` : `${size} B`);
-                            meta.innerHTML = `${rec.audioUrl ? `<audio controls src="${rec.audioUrl}"></audio>` : ''} ${rec.serverUrl ? `<a href="${rec.serverUrl}" download>Download</a>` : ''} ${size ? `(${human})` : ''}`;
-                        } else {
-                            // If panel not present yet, re-render to surface the link
-                            try { await renderRecordingPanel(rec); } catch(_) {}
-                        }
-                    }
-                    if (savedCloseTimer) {
-                        clearTimeout(savedCloseTimer);
-                        savedCloseTimer = null;
-                    }
-                    // Keep socket alive; do not close here
-                } else if (data.type === 'pong') {
-                    connStatus.innerText = `WebSocket: pong (${data.ts})`;
-                } else if (data.type === 'status') {
-                    // Redundant, indicator lives near full record title
-                } else if (data.type === 'auth') {
-                    const ready = !!data.ready;
-                    const info = data.info || {};
-                    const project = info.project_id || '';
-                    const email = info.client_email_masked || '';
-                    const key = info.private_key_id_masked || '';
-                    console.log('Frontend: Google auth status:', { ready, project, email, key });
-                } else if (data.type === 'ack') {
-                    if (data.what === 'start') {
-                        connStatus.innerText = 'WebSocket: start acknowledged';
-                    } else if (data.what === 'stop') {
-                        connStatus.innerText = 'WebSocket: stop acknowledged';
-                    } else {
-                        connStatus.innerText = 'WebSocket: ack received';
-                    }
-                }
-            };
+            // WebSocket message handler is now moved to SSE/HTMX for UI updates; we keep WS for audio.
 
             socket.onclose = () => {
                 console.log('Frontend: Direct WebSocket closed.');
@@ -921,5 +710,68 @@ document.addEventListener('DOMContentLoaded', () => {
     // Close socket only on page unload/navigation
     window.addEventListener('beforeunload', () => { try { if (socket && socket.readyState === WebSocket.OPEN) socket.close(); } catch(_) {} });
     console.log('Frontend: DOMContentLoaded - Ready for interaction.');
+
+    // Wire SSE (Server-Sent Events) to trigger HTMX fragment refreshes
+    try {
+        const es = new EventSource('/events');
+        es.addEventListener('segment_saved', async (e) => {
+            try {
+                const data = JSON.parse(e.data || '{}');
+                if (!currentRecording) return;
+                const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
+                const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
+                const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
+                currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
+                const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
+                const rowId = `segrow-${currentRecording.id}-${segIndex}`;
+                let row = document.getElementById(rowId);
+                if (!row && tbody) {
+                    row = document.createElement('tr');
+                    row.id = rowId;
+                    row.setAttribute('hx-post', '/render/segment_row');
+                    row.setAttribute('hx-trigger', 'refresh-row');
+                    row.setAttribute('hx-target', 'this');
+                    row.setAttribute('hx-swap', 'outerHTML');
+                    row.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
+                    // minimal placeholder cells so the row is visible before swap
+                    row.innerHTML = '<td></td><td></td><td></td>';
+                    // remove pending countdown row if present, then insert new row at top
+                    const pending = document.getElementById(`segpending-${currentRecording.id}`);
+                    if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
+                    tbody.insertBefore(row, tbody.firstChild);
+                }
+                // Trigger HTMX refresh on this row
+                const target = document.getElementById(rowId);
+                if (target) htmx.trigger(target, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
+            } catch(_) {}
+        });
+        es.addEventListener('saved', (e) => {
+            try {
+                const data = JSON.parse(e.data || '{}');
+                const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || recordings[recordings.length - 1]);
+                if (rec) {
+                    if (data.url) rec.serverUrl = data.url;
+                    if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
+                    const fullEl = document.getElementById(`fulltable-${rec.id}`);
+                    if (fullEl) htmx.trigger(fullEl, 'refresh-full', { detail: { record: JSON.stringify(rec) } });
+                }
+            } catch(_) {}
+        });
+        // transcripts events simply trigger row refresh if row exists
+        const txHandler = (svc) => (e) => {
+            try {
+                const data = JSON.parse(e.data || '{}');
+                const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                if (!currentRecording) return;
+                const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
+                if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
+            } catch(_) {}
+        };
+        es.addEventListener('segment_transcript_google', txHandler('google'));
+        es.addEventListener('segment_transcript_vertex', txHandler('vertex'));
+        es.addEventListener('segment_transcript_gemini', txHandler('gemini'));
+        es.addEventListener('segment_transcript_aws', txHandler('aws'));
+    } catch(_) {}
 });
 

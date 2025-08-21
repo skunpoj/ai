@@ -22,6 +22,7 @@ from server.state import app_state
 from server.routes import build_index, render_panel, render_segment_row, render_full_row, _render_segment_row
 from server.ws import ws_handler
 from server.services.registry import list_services as registry_list, set_service_enabled
+from server.sse_bus import stream as sse_stream
 from typing import Any, List, Dict
 from starlette.responses import JSONResponse, HTMLResponse
 import json
@@ -148,6 +149,11 @@ def render_full_row_route(record: str = '') -> Any:
         return HTMLResponse(str(table))
     except Exception:
         return HTMLResponse("<table></table>")
+
+@rt("/events")
+async def sse_events() -> Any:
+    from starlette.responses import StreamingResponse
+    return StreamingResponse(sse_stream(), media_type="text/event-stream")
 
 serve()
 
