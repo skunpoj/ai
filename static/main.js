@@ -112,8 +112,24 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!socket || (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING)) {
                 const wsUrl = buildWSUrl(window.location, '/ws_stream');
                 socket = new WebSocket(wsUrl);
-                socket.onerror = err => { console.warn('Frontend: WebSocket error', err); };
-                socket.onclose = () => { console.log('Frontend: WebSocket closed.'); connStatus.innerText = 'WebSocket: closed'; };
+                // Attach lightweight handlers so status reflects before recording begins
+                if (!socket._basicHandlersAttached) {
+                    socket.addEventListener('open', () => {
+                        connStatus.innerText = 'WebSocket: open';
+                        try { sendJSON(socket, { type: 'hello' }); } catch(_) {}
+                    });
+                    socket.addEventListener('message', ev => {
+                        try {
+                            const msg = JSON.parse(ev.data);
+                            if (msg && msg.type === 'pong') {
+                                connStatus.innerText = `WebSocket: pong (${msg.ts || ''})`;
+                            }
+                        } catch (_) {}
+                    });
+                    socket.addEventListener('error', err => { console.warn('Frontend: WebSocket error', err); });
+                    socket.addEventListener('close', () => { connStatus.innerText = 'WebSocket: closed'; });
+                    socket._basicHandlersAttached = true;
+                }
             }
         } catch(_) {}
     }
@@ -629,10 +645,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Manual connection check button (inside modal)
-    if (testConnBtn) testConnBtn.addEventListener('click', () => {
-        if (!socket) { alert('Socket not created yet. Click Start Recording first.'); return; }
-        try { socket.send(JSON.stringify({ type: 'ping' })); connStatus.innerText = 'WebSocket: ping sent'; }
-        catch (e) { console.warn('Frontend: ping send failed:', e); connStatus.innerText = 'WebSocket: ping failed'; }
+    if (testConnBtn) testConnBtn.addEventListener('click', async () => {
+        await ensureSocketOpen();
+        const sendPing = () => {
+            try { socket.send(JSON.stringify({ type: 'ping' })); connStatus.innerText = 'WebSocket: ping sent'; }
+            catch (e) { console.warn('Frontend: ping send failed:', e); connStatus.innerText = 'WebSocket: ping failed'; }
+        };
+        if (socket && socket.readyState === WebSocket.OPEN) sendPing();
+        else if (socket) socket.addEventListener('open', sendPing, { once: true });
     });
 
     /**
