@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let socket;
     let recordings = []; // Array of {audioUrl, serverUrl, startTs, stopTs, durationMs, transcripts}
     let currentRecording = null; // Active recording object
+    let lastRecordingId = null; // Track last recording id for late events
     let recordStartTs = null;
     const seenTxKeys = new Set(); // dedupe transcript lines across duplicate events
     let savedCloseTimer = null; // Delay socket close until server confirms save
@@ -44,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const segmentLenGroup = document.getElementById('segmentLenGroup');
     const openSegmentModalBtn = document.getElementById('openSegmentModal');
     const segmentModal = document.getElementById('segmentModal');
-    const closeSegmentModalBtn = document.getElementById('closeSegmentModal');
+    const okSegmentModalBtn = document.getElementById('okSegmentModal');
     const fullTranscriptContainer = document.getElementById('fullTranscriptContainer');
     const serviceAdminRoot = null; // removed separate admin; now in modal
     // Recorder helpers
@@ -106,8 +107,19 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
+    async function ensureSocketOpen() {
+        try {
+            if (!socket || (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING)) {
+                const wsUrl = buildWSUrl(window.location, '/ws_stream');
+                socket = new WebSocket(wsUrl);
+                socket.onerror = err => { console.warn('Frontend: WebSocket error', err); };
+                socket.onclose = () => { console.log('Frontend: WebSocket closed.'); connStatus.innerText = 'WebSocket: closed'; };
+            }
+        } catch(_) {}
+    }
     if (openSegmentModalBtn && segmentModal) openSegmentModalBtn.addEventListener('click', async () => {
         segmentModal.style.display = 'block';
+        await ensureSocketOpen();
         // Initialize provider checkboxes to reflect backend registry
         try {
             const map = {
@@ -120,7 +132,12 @@ document.addEventListener('DOMContentLoaded', () => {
             svcs.forEach(s => { if (map[s.key]) map[s.key].checked = !!s.enabled; });
         } catch (_) {}
     });
-    if (closeSegmentModalBtn && segmentModal) closeSegmentModalBtn.addEventListener('click', () => { segmentModal.style.display = 'none'; });
+    if (okSegmentModalBtn && segmentModal) okSegmentModalBtn.addEventListener('click', () => { segmentModal.style.display = 'none'; });
+    // Force open modal and socket on initial load
+    if (segmentModal) {
+        segmentModal.style.display = 'block';
+        ensureSocketOpen();
+    }
 
     // Wire provider toggles in modal to backend
     async function wireProviderModal() {
@@ -173,6 +190,7 @@ document.addEventListener('DOMContentLoaded', () => {
             fullAppend: { googleLive: '', google: '', vertex: '', gemini: '' }
         };
         recordings.push(currentRecording);
+        lastRecordingId = currentRecording.id;
         ensureRecordingTab(currentRecording);
         renderRecordingPanel(currentRecording);
 
@@ -220,13 +238,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 workletNode.connect(audioCtx.destination);
             }
 
-            // Connect WebSocket for streaming chunks BEFORE starting recorder to avoid sending to closed socket
-            const wsUrl = buildWSUrl(window.location, '/ws_stream');
-            socket = new WebSocket(wsUrl);
-
-            socket.onopen = () => {
-                console.log('Frontend: Direct WebSocket opened to /ws_stream for audio streaming.');
-                // MediaRecorder.start() will be called only after 'ready' signal from backend
+            // Ensure persistent WebSocket is open; reuse if already open/connecting
+            await ensureSocketOpen();
+            const onSocketReady = () => {
+                console.log('Frontend: WebSocket ready for audio streaming.');
                 try {
                     sendJSON(socket, { type: 'hello' });
                     console.log('Frontend: Sent hello handshake.');
@@ -236,7 +251,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
                 stopTranscribeButton.disabled = false;
-                // If Auto Transcribe is ON, immediately start transcribing
                 if (autoTranscribeToggle && autoTranscribeToggle.checked) {
                     try { sendJSON(socket, { type: 'transcribe', enabled: true }); } catch(_) {}
                     startTranscribeButton.style.display = 'none';
@@ -245,11 +259,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     startTranscribeButton.style.display = '';
                     stopTranscribeButton.style.display = '';
                 }
-                // Start continuous full recorder
                 try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); } catch (e) { console.warn('Frontend: start on open failed:', e); }
-                // Start per-segment recorder loop to guarantee fresh headers/footers per segment
                 startSegmentLoop();
             };
+            if (socket.readyState === WebSocket.OPEN) {
+                onSocketReady();
+            } else {
+                socket.addEventListener('open', onSocketReady, { once: true });
+            }
 
             // WebSocket message handler: updates UI and recording state
             socket.onmessage = async event => {
@@ -299,8 +316,42 @@ document.addEventListener('DOMContentLoaded', () => {
                         const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
                         const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
                         currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime, size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
-                        // Refresh only the affected row
-                        await refreshSegmentRow(currentRecording, segIndex);
+                        // Insert or update row at top without reloading the whole table
+                        const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
+                        const rowId = `segrow-${currentRecording.id}-${segIndex}`;
+                        const existing = document.getElementById(rowId);
+                        if (tbody && !existing) {
+                            // Build a minimal row with placeholders and prepend
+                            const tr = document.createElement('tr');
+                            tr.id = rowId;
+                            tr.setAttribute('hx-post', '/render/segment_row');
+                            tr.setAttribute('hx-trigger', 'refresh-row');
+                            tr.setAttribute('hx-target', 'this');
+                            tr.setAttribute('hx-swap', 'outerHTML');
+                            tr.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
+                            const audioCell = document.createElement('td');
+                            audioCell.innerHTML = `${data.url ? `<audio controls src="${data.url}"></audio> <a href="${data.url}" download>Download</a>` : ''} ${data.size ? `(${(data.size/1024).toFixed(0)} KB)` : ''}`;
+                            const startCell = document.createElement('td');
+                            startCell.textContent = new Date(startMs).toLocaleTimeString();
+                            const endCell = document.createElement('td');
+                            endCell.textContent = new Date(endMs).toLocaleTimeString();
+                            tr.appendChild(audioCell);
+                            tr.appendChild(startCell);
+                            tr.appendChild(endCell);
+                            // Add one cell per enabled service as placeholder
+                            try {
+                                const services = await getServices();
+                                services.filter(s => s.enabled).forEach(s => {
+                                    const td = document.createElement('td');
+                                    td.setAttribute('data-svc', s.key);
+                                    td.textContent = 'transcribing…';
+                                    tr.appendChild(td);
+                                });
+                            } catch(_) {}
+                            tbody.insertBefore(tr, tbody.firstChild);
+                        } else {
+                            await refreshSegmentRow(currentRecording, segIndex);
+                        }
                     }
                 } else if (data.type === 'segment_transcript' || data.type === 'segment_transcript_google') {
                     const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
@@ -315,7 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
                         if (row) {
                             const td = row.querySelector('td[data-svc="google"]');
-                            if (td) td.textContent = currentRecording.transcripts.google[segIndex] || '';
+                            if (td) td.textContent = (currentRecording.transcripts.google[segIndex] || '').trim() || '...';
                         }
                         const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="google"]`);
                         if (full) {
@@ -336,7 +387,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
                         if (row) {
                             const td = row.querySelector('td[data-svc="vertex"]');
-                            if (td) td.textContent = currentRecording.transcripts.vertex[segIndex] || '';
+                            if (td) td.textContent = (currentRecording.transcripts.vertex[segIndex] || '').trim() || '...';
                         }
                         const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="vertex"]`);
                         if (full) {
@@ -357,7 +408,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
                         if (row) {
                             const td = row.querySelector('td[data-svc="gemini"]');
-                            if (td) td.textContent = currentRecording.transcripts.gemini[segIndex] || '';
+                            if (td) td.textContent = (currentRecording.transcripts.gemini[segIndex] || '').trim() || '...';
                         }
                         const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="gemini"]`);
                         if (full) {
@@ -370,25 +421,27 @@ document.addEventListener('DOMContentLoaded', () => {
                     // Server finalized and saved the recording file
                     const savedUrl = data.url;
                     console.log('Frontend: Server saved recording at:', savedUrl);
-                    if (currentRecording) {
-                        currentRecording.serverUrl = savedUrl;
-                        if (typeof data.size === 'number') currentRecording.serverSizeBytes = data.size;
-                        // Update download link and size inline
-                        const meta = document.getElementById(`recordmeta-${currentRecording.id}`);
+                    // Prefer active record; fallback to last known or most recent
+                    const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || recordings[recordings.length - 1]);
+                    if (rec) {
+                        rec.serverUrl = savedUrl;
+                        if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
+                        // Update download link and size inline for this record panel
+                        const meta = document.getElementById(`recordmeta-${rec.id}`);
                         if (meta) {
-                            const size = (typeof currentRecording.serverSizeBytes === 'number' && currentRecording.serverSizeBytes > 0) ? currentRecording.serverSizeBytes : currentRecording.clientSizeBytes || 0;
+                            const size = (typeof rec.serverSizeBytes === 'number' && rec.serverSizeBytes > 0) ? rec.serverSizeBytes : rec.clientSizeBytes || 0;
                             const human = size >= 1048576 ? `${(size/1048576).toFixed(1)} MB` : (size >= 1024 ? `${Math.round(size/1024)} KB` : `${size} B`);
-                            meta.innerHTML = `${currentRecording.audioUrl ? `<audio controls src="${currentRecording.audioUrl}"></audio>` : ''} ${currentRecording.serverUrl ? `<a href="${currentRecording.serverUrl}" download>Download</a>` : ''} ${size ? `(${human})` : ''}`;
+                            meta.innerHTML = `${rec.audioUrl ? `<audio controls src="${rec.audioUrl}"></audio>` : ''} ${rec.serverUrl ? `<a href="${rec.serverUrl}" download>Download</a>` : ''} ${size ? `(${human})` : ''}`;
+                        } else {
+                            // If panel not present yet, re-render to surface the link
+                            try { await renderRecordingPanel(rec); } catch(_) {}
                         }
                     }
                     if (savedCloseTimer) {
                         clearTimeout(savedCloseTimer);
                         savedCloseTimer = null;
                     }
-                    // Now safely close socket
-                    try {
-                        if (socket.readyState === WebSocket.OPEN) socket.close();
-                    } catch (_) {}
+                    // Keep socket alive; do not close here
                 } else if (data.type === 'pong') {
                     connStatus.innerText = `WebSocket: pong (${data.ts})`;
                 } else if (data.type === 'status') {
@@ -504,15 +557,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         sendJSON(socket, { type: 'full_upload', audio: b64full, mime: recMimeType || 'audio/webm' });
                     }
                 } catch (_) {}
-                if (socket.readyState === WebSocket.OPEN) {
-                    sendJSON(socket, { type: 'ping_stop' });
-                    sendJSON(socket, { end_stream: true });
-                    savedCloseTimer = setTimeout(() => {
-                        try {
-                            if (socket && socket.readyState === WebSocket.OPEN) socket.close();
-                        } catch (_) {}
-                    }, 1500);
-                }
+                // Keep persistent socket alive; do not send end_stream or close here
                 if (currentRecording) renderRecordingPanel(currentRecording);
                 currentRecording = null; // Reset for next session (recordings array keeps history)
             };
@@ -667,6 +712,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentRecording) renderRecordingPanel(currentRecording);
     }
 
+    // Close socket only on page unload/navigation
+    window.addEventListener('beforeunload', () => { try { if (socket && socket.readyState === WebSocket.OPEN) socket.close(); } catch(_) {} });
     console.log('Frontend: DOMContentLoaded - Ready for interaction.');
 });
 
