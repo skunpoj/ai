@@ -83,7 +83,7 @@ def build_index():
                 Div(id="recordTabs", style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"),
                 Div(id="recordPanels")
             ),
-            Script(src="https://unpkg.com/htmx.org@1.9.12"),
+            # HTMX is bundled by FastHTML; no need to load separately
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
             Script(f"let SEGMENT_MS = {SEGMENT_MS_DEFAULT};"),
             Script("window.SEGMENT_MS = SEGMENT_MS;"),
