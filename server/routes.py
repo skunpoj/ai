@@ -152,6 +152,13 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         except Exception:
             mt = "audio/webm"
         player_bits.append(Audio(Source(src=src_url, type=mt), controls=True))
+        try:
+            # Provide an optional button to force-load the entire file so browser download appears immediately
+            if record.get("serverUrl"):
+                player_bits.append(Space(" "))
+                player_bits.append(Button("Load Full", id=f"loadFull-{record.get('id','')}", data_load_full=record.get("serverUrl")))
+        except Exception:
+            pass
     # no explicit download link
     size_bytes = 0
     if isinstance(record.get("serverSizeBytes"), int) and record["serverSizeBytes"] > 0:
