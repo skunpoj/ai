@@ -35,7 +35,9 @@ cred = ensure_google_credentials_from_env()
 # Audio recording parameters (moved to config for reuse)
 SEGMENT_MS = SEGMENT_MS_DEFAULT
 
-app, rt = fast_app(exts='ws') # Ensure 'exts='ws'' is present
+# Include HTMX SSE extension for server-sent events
+_HDRS = (Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"),)
+app, rt = fast_app(exts='ws', hdrs=_HDRS) # WS for audio; SSE for UI updates
 # Serve static from an absolute path to avoid CWD-related 404s
 _STATIC_DIR = os.path.join(_ROOT, "static")
 app.static_route_exts(prefix="/static", static_path=_STATIC_DIR) # Configure static files serving

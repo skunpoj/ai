@@ -8,7 +8,6 @@ import asyncio
 from typing import Optional
 from google.cloud import speech
 
-
 async def recognize_segment(client: speech.SpeechClient, segment_bytes: bytes, mime_ext: str, language_code: str = "en-US") -> str:
     loop = asyncio.get_running_loop()
 
