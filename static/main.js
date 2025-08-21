@@ -211,6 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     async function scheduleSegmentTimeouts(recordId, idx) {
         try {
+            if (!segmentLoopActive) { console.log('Frontend: skip scheduling timeout (not active)', { recordId, idx }); return; }
             const services = await getServicesCached();
             const enabled = services.filter(s => s.enabled);
             const TIMEOUT_MS = Number(segmentMs) && Number(segmentMs) >= 1000 ? Number(segmentMs) + 500 : 30000;
@@ -218,11 +219,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const k = timeoutKey(recordId, idx, s.key);
                 if (transcribeTimeouts.has(k)) return;
                 const to = setTimeout(() => {
+                    if (!segmentLoopActive) { transcribeTimeouts.delete(k); return; }
                     try {
                         const row = document.getElementById(`segrow-${recordId}-${idx}`);
                         if (!row) return;
                         const td = row.querySelector(`td[data-svc="${s.key}"]`);
-                        if (td) td.textContent = 'no result (timeout)';
+                        if (td) { td.textContent = 'no result (timeout)'; console.log('Frontend: timeout applied', { recordId, idx, svc: s.key }); }
                         if (currentRecording && currentRecording.id === recordId) {
                             const arr = (currentRecording.timeouts[s.key] = currentRecording.timeouts[s.key] || []);
                             while (arr.length <= idx) arr.push(false);
@@ -232,6 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     transcribeTimeouts.delete(k);
                 }, TIMEOUT_MS);
                 transcribeTimeouts.set(k, to);
+                console.log('Frontend: scheduled timeout', { recordId, idx, svc: s.key, ms: TIMEOUT_MS });
             });
         } catch(_) {}
     }
@@ -418,11 +421,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
                             currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
                             // Use shared helper to create the row immediately so playback appears in-session
-                            try { await prependSegmentRow(currentRecording, segIndex, data, startMs, endMs); } catch(_) {}
+                            try { await prependSegmentRow(currentRecording, segIndex, data, startMs, endMs); } catch(e) { console.log('Frontend: prependSegmentRow failed', e); }
                             // Re-create a fresh countdown row for the next segment window
                             try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
                             // Ensure timeout is scheduled for the row's cells
-                            try { await scheduleSegmentTimeouts(currentRecording.id, segIndex); } catch(_) {}
+                            try { await scheduleSegmentTimeouts(currentRecording.id, segIndex); } catch(e) { console.log('Frontend: scheduleSegmentTimeouts failed', e); }
                         } catch(_) {}
                     };
                     const handleSaved = (data) => {
@@ -776,12 +779,20 @@ document.addEventListener('DOMContentLoaded', () => {
             ev.preventDefault(); ev.stopPropagation();
             const url = el.getAttribute('data-load-full') || '';
             if (!url) return;
+            console.log('Frontend: data-load-full click', { url, tag: el.tagName, id: el.id });
             // show a lightweight loading hint
             const prevText = el.textContent;
             try { el.textContent = (prevText || '').replace(/\([^)]*\)/, '(loading…)') || 'loading…'; } catch(_) {}
-            const resp = await fetch(url, { cache: 'no-store' });
-            const blob = await resp.blob();
-            const objectUrl = URL.createObjectURL(blob);
+            let objectUrl = '';
+            let mime = '';
+            if (url.startsWith('blob:')) {
+                objectUrl = url;
+            } else {
+                const resp = await fetch(url, { cache: 'no-store' });
+                const blob = await resp.blob();
+                objectUrl = URL.createObjectURL(blob);
+                mime = resp.headers && resp.headers.get ? (resp.headers.get('Content-Type') || '') : '';
+            }
             // trigger download via a temporary anchor
             try {
                 const a = document.createElement('a');
@@ -790,7 +801,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-            } catch(_) {}
+                console.log('Frontend: triggered download for', url);
+            } catch(err) { console.log('Frontend: download trigger failed', err); }
             // find the nearest audio element in the same cell/container
             let audio = null;
             const td = el.closest ? el.closest('td') : null;
@@ -802,7 +814,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (audio) {
                 // Prefer updating <source> child to keep type; fallback to audio.src
                 let srcEl = audio.querySelector('source');
-                const mime = resp.headers && resp.headers.get ? (resp.headers.get('Content-Type') || '') : '';
                 if (!srcEl) srcEl = document.createElement('source');
                 srcEl.src = objectUrl;
                 if (mime) srcEl.type = mime;
@@ -810,10 +821,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     audio.innerHTML = '';
                     audio.appendChild(srcEl);
                 }
-                try { audio.load(); } catch(_) {}
+                try { audio.load(); } catch(err) { console.log('Frontend: audio reload failed', err); }
             }
             try { if (prevText) el.textContent = prevText; } catch(_) {}
-        } catch(_) {}
+        } catch(err) {
+            console.log('Frontend: data-load-full click failed', err);
+        }
     });
 
     // Wire SSE (Server-Sent Events) to trigger HTMX fragment refreshes
