@@ -1,5 +1,8 @@
 // UI renderers for recording panels
+// - Shows download icon 📥 and file size next to audio
+// - Displays segment start/end as elapsed m:ss from recording start
 import { getServices } from '/static/ui/services.js';
+import { formatElapsed } from '/static/ui/segments.js';
 import { bytesToLabel } from '/static/ui/format.js';
 import { ensureTab as ensureUITab } from '/static/ui/tabs.js';
 
@@ -25,7 +28,7 @@ export async function renderRecordingPanel(record) {
   const sizeLabel = (typeof record.serverSizeBytes === 'number' && record.serverSizeBytes > 0)
     ? bytesToLabel(record.serverSizeBytes)
     : (typeof record.clientSizeBytes === 'number' ? bytesToLabel(record.clientSizeBytes) : '');
-  const playerAndDownload = `${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''} ${record.serverUrl ? `<a href="${record.serverUrl}" download>Download</a>` : ''} ${sizeLabel ? `(${sizeLabel})` : ''}`;
+  const playerAndDownload = `${record.audioUrl ? `<audio controls src="${record.audioUrl}"></audio>` : ''} ${record.serverUrl ? `<a href="${record.serverUrl}" download title="Download">📥</a>` : ''} ${sizeLabel ? `(${sizeLabel})` : ''}`;
 
   // Fetch current services dynamically from backend
   const services = (await getServices()).filter(s => !!s.enabled);
@@ -39,8 +42,8 @@ export async function renderRecordingPanel(record) {
     const seg = record.segments[i];
     const leftCells = `
       <td>${seg ? `<audio controls src="${seg.url}"></audio>` : ''} ${seg && seg.url ? `<a href="${seg.url}" download>Download</a>` : ''} ${seg && seg.size ? `(${bytesToLabel(seg.size)})` : ''}</td>
-      <td>${seg && seg.startMs ? new Date(seg.startMs).toLocaleTimeString() : ''}</td>
-      <td>${seg && seg.endMs ? new Date(seg.endMs).toLocaleTimeString() : ''}</td>
+      <td>${seg && seg.startMs ? formatElapsed(seg.startMs - (record.startTs || seg.startMs)) : ''}</td>
+      <td>${seg && seg.endMs ? formatElapsed(seg.endMs - (record.startTs || seg.endMs)) : ''}</td>
     `;
     const svcCells = services.map(svc => {
       const val = (record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : '';

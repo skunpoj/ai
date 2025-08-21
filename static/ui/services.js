@@ -20,3 +20,14 @@ export async function getServices() {
 }
 
 
+// Lightweight client-side cache to avoid repeated fetches during a tight loop
+let _svcCache = { ts: 0, data: null };
+export async function getServicesCached(ttlMs = 1500) {
+    const now = Date.now();
+    if (_svcCache.data && (now - _svcCache.ts) < ttlMs) return _svcCache.data;
+    const data = await getServices();
+    _svcCache = { ts: now, data };
+    return data;
+}
+
+
