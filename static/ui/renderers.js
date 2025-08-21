@@ -72,7 +72,7 @@ export async function renderRecordingPanel(record) {
     <div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div>
     <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
       <h3>Full Record</h3>
-      <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse; width:100%">
+      <table border="0" cellpadding="4" cellspacing="0" style="border-collapse:collapse; border:0; width:100%">
         <thead>
           <tr>
             ${services.map(s => `<th>${s.label}</th>`).join('')}
@@ -86,7 +86,7 @@ export async function renderRecordingPanel(record) {
     </div>
     <div style="margin-top:12px">
       <h3>Segments</h3>
-      <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse; width:100%">
+      <table border="0" cellpadding="4" cellspacing="0" style="border-collapse:collapse; border:0; width:100%">
         <thead>
           <tr>
             <th>Segment</th>
