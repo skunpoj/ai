@@ -51,7 +51,9 @@ def build_index():
             Script(
                 f"window.GOOGLE_AUTH_INFO = {json.dumps(app_state.auth_info or {})};\n"
                 f"window.GOOGLE_AUTH_READY = {( 'true' if (app_state.speech_client and app_state.streaming_config) else 'false' )};\n"
-                "console.log('Frontend: Google auth on load:', { ready: window.GOOGLE_AUTH_READY, info: window.GOOGLE_AUTH_INFO });"
+                "console.log('Frontend: Google auth on load:', { ready: window.GOOGLE_AUTH_READY, info: window.GOOGLE_AUTH_INFO });\n"
+                "try { const cg = document.getElementById('cred_google'); if (cg) { const i = window.GOOGLE_AUTH_INFO||{}; cg.textContent = `Google: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}${i.client_email_masked ? ' · ' + i.client_email_masked : ''}${i.private_key_id_masked ? ' · ' + i.private_key_id_masked : ''}`; } } catch(_) {}\n"
+                "try { const cv = document.getElementById('cred_vertex'); if (cv) { const i = window.GOOGLE_AUTH_INFO||{}; cv.textContent = `Vertex: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}${i.client_email_masked ? ' · ' + i.client_email_masked : ''}${i.private_key_id_masked ? ' · ' + i.private_key_id_masked : ''}`; } } catch(_) {}"
             ),
             Script(src="/static/main.js", type="module")
         )
@@ -71,7 +73,30 @@ def build_panel_html(record: Dict[str, Any]) -> str:
 
     # Full record section (no 'Transcribing…' indicator)
     full_header = Tr(*[Th(s["label"]) for s in services])
-    full_row = Tr(*[Td(((record.get("fullAppend", {}) or {}).get(s["key"], "")), data_svc=s["key"]) for s in services], id=f"fullrow-{record.get('id','')}")
+    # show download icon and size in first cell if serverUrl present
+    first_cell_bits: List[Any] = []
+    if record.get("serverUrl"):
+        human = ""
+        try:
+            size = int(record.get("serverSizeBytes") or 0)
+            if size >= 1048576:
+                human = f"({round(size/1048576,1)} MB)"
+            elif size >= 1024:
+                human = f"({int(round(size/1024))} KB)"
+            elif size > 0:
+                human = f"({size} B)"
+        except Exception:
+            human = ""
+        first_cell_bits = [A("📥", href=record.get("serverUrl"), download=True, title="Download"), Space(" "), Small(human)]
+    full_cells = []
+    for s in services:
+        val = ((record.get("fullAppend", {}) or {}).get(s["key"], ""))
+        # prepend download icon only in first service column
+        if not full_cells and first_cell_bits:
+            full_cells.append(Td(*first_cell_bits, data_svc=s["key"]))
+        else:
+            full_cells.append(Td(val, data_svc=s["key"]))
+    full_row = Tr(*full_cells, id=f"fullrow-{record.get('id','')}")
     full_table = Table(
         THead(full_header),
         TBody(full_row),
@@ -81,7 +106,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         style="border-collapse:collapse; width:100%",
         id=f"fulltable-{record.get('id','')}",
         hx_post="/render/full_row",
-        hx_trigger="refresh-full",
+        hx_trigger="refresh-full from:body",
         hx_target="this",
         hx_swap="innerHTML",
         hx_vals=json.dumps({"record": record})
@@ -145,6 +170,15 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         Div(
             H3("Segments"),
             seg_table,
+            # SSE hooks for htmx to trigger fragment refreshes
+            Div(
+                hx_sse="connect:/events",
+                hx_trigger="message[evt.detail && evt.detail.type === 'segment_saved'] from:body",
+            ),
+            Div(
+                hx_sse="connect:/events",
+                hx_trigger="message[evt.detail && evt.detail.type === 'saved'] from:body",
+            ),
             style="margin-top:12px")
     )
     return str(panel)
@@ -208,7 +242,7 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
         *svc_cells,
         id=f"segrow-{record.get('id','')}-{idx}",
         hx_post="/render/segment_row",
-        hx_trigger="refresh-row",
+        hx_trigger="refresh-row from:body",
         hx_target="this",
         hx_swap="outerHTML",
         hx_vals=__json.dumps({"record": record, "idx": idx})

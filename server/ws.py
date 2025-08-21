@@ -18,6 +18,7 @@ from server.services.vertex_langchain import is_available as lc_vertex_available
 from server.services.gemini_api import extract_text_from_gemini_response
 from server.services.registry import is_enabled as service_enabled
 from server.services import aws_transcribe
+from server.sse_bus import publish as sse_publish
 
 
 def now_ms() -> int:
@@ -58,26 +59,57 @@ async def ws_handler(websocket: WebSocket) -> None:
 
                 if mtype == "hello":
                     await websocket.send_json({"type": "ready"})
+                    try:
+                        await sse_publish({"type": "ready"})
+                    except Exception:
+                        pass
                     continue
                 if mtype == "ping":
-                    await websocket.send_json({"type": "pong", "ts": now_ms()})
+                    ts = now_ms()
+                    await websocket.send_json({"type": "pong", "ts": ts})
+                    try:
+                        await sse_publish({"type": "pong", "ts": ts})
+                    except Exception:
+                        pass
                     continue
                 if mtype == "ping_start":
                     await websocket.send_json({"type": "ack", "what": "start"})
+                    try:
+                        await sse_publish({"type": "ack", "what": "start"})
+                    except Exception:
+                        pass
                     continue
                 if mtype == "ping_stop":
                     await websocket.send_json({"type": "ack", "what": "stop"})
+                    try:
+                        await sse_publish({"type": "ack", "what": "stop"})
+                    except Exception:
+                        pass
                     continue
                 if mtype == "transcribe":
                     transcribe_enabled = bool(message.get("enabled", False))
                     await websocket.send_json({"type": "ack", "what": "transcribe", "enabled": transcribe_enabled})
+                    try:
+                        await sse_publish({"type": "ack", "what": "transcribe", "enabled": transcribe_enabled})
+                    except Exception:
+                        pass
                     if transcribe_enabled:
-                        await websocket.send_json({
+                        auth_msg = {
                             "type": "auth",
                             "ready": bool(app_state.speech_client and app_state.streaming_config),
                             "info": app_state.auth_info or {}
-                        })
-                        await websocket.send_json({"type": "status", "message": "Transcribing... awaiting results"})
+                        }
+                        await websocket.send_json(auth_msg)
+                        try:
+                            await sse_publish(auth_msg)
+                        except Exception:
+                            pass
+                        status_msg = {"type": "status", "message": "Transcribing... awaiting results"}
+                        await websocket.send_json(status_msg)
+                        try:
+                            await sse_publish(status_msg)
+                        except Exception:
+                            pass
                     continue
                 if mtype == "full_upload" and message.get("audio"):
                     try:
@@ -102,7 +134,12 @@ async def ws_handler(websocket: WebSocket) -> None:
                         with open(server_filepath, "wb") as sf:
                             sf.write(decoded_full)
                         saved_url = f"/static/recordings/{server_filename}"
-                        await websocket.send_json({"type": "saved", "url": saved_url, "size": len(decoded_full)})
+                        saved = {"type": "saved", "url": saved_url, "size": len(decoded_full)}
+                        await websocket.send_json(saved)
+                        try:
+                            await sse_publish(saved)
+                        except Exception:
+                            pass
                     except Exception as e:
                         print(f"WS error full_upload: {e}")
                     continue
@@ -116,7 +153,12 @@ async def ws_handler(websocket: WebSocket) -> None:
                             size_bytes = os.path.getsize(server_filepath)
                         except Exception:
                             pass
-                        await websocket.send_json({"type": "saved", "url": saved_url, "size": size_bytes})
+                        saved = {"type": "saved", "url": saved_url, "size": size_bytes}
+                        await websocket.send_json(saved)
+                        try:
+                            await sse_publish(saved)
+                        except Exception:
+                            pass
                     except Exception as e:
                         print(f"WS error end_stream save: {e}")
                     break
@@ -134,7 +176,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                         seg_url = f"/static/recordings/session_{session_ts}/segment_{segment_index}.{seg_ext}"
                         client_id = message.get("id")
                         client_ts = message.get("ts") or now_ms()
-                        await websocket.send_json({
+                        ev = {
                             "type": "segment_saved",
                             "idx": segment_index,
                             "url": seg_url,
@@ -144,14 +186,29 @@ async def ws_handler(websocket: WebSocket) -> None:
                             "ext": seg_ext,
                             "mime": client_mime,
                             "size": len(seg_bytes)
-                        })
+                        }
+                        await websocket.send_json(ev)
+                        try:
+                            await sse_publish(ev)
+                        except Exception:
+                            pass
                         # Dispatch Google STT per-segment
                         if transcribe_enabled and service_enabled("google") and app_state.speech_client is not None:
                             async def do_google(idx: int, b: bytes, ext: str):
                                 try:
                                     text = await recognize_google_segment(app_state.speech_client, b, ext)
-                                    await websocket.send_json({"type": "segment_transcript_google", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
-                                    await websocket.send_json({"type": "segment_transcript", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
+                                    msg = {"type": "segment_transcript_google", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
+                                    await websocket.send_json(msg)
+                                    try:
+                                        await sse_publish(msg)
+                                    except Exception:
+                                        pass
+                                    msg2 = {"type": "segment_transcript", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
+                                    await websocket.send_json(msg2)
+                                    try:
+                                        await sse_publish(msg2)
+                                    except Exception:
+                                        pass
                                 except Exception as e:
                                     print(f"WS error google segment: {e}")
                             asyncio.create_task(do_google(segment_index, seg_bytes, seg_ext))
@@ -183,7 +240,12 @@ async def ws_handler(websocket: WebSocket) -> None:
                                         if resp is None and last_exc:
                                             raise last_exc
                                         text = extract_text_from_vertex_response(resp)
-                                    await websocket.send_json({"type": "segment_transcript_vertex", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
+                                    msg = {"type": "segment_transcript_vertex", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
+                                    await websocket.send_json(msg)
+                                    try:
+                                        await sse_publish(msg)
+                                    except Exception:
+                                        pass
                                 except Exception as e:
                                     print(f"WS error vertex segment: {e}")
                             asyncio.create_task(do_vertex(segment_index, seg_bytes, seg_ext))
@@ -208,7 +270,12 @@ async def ws_handler(websocket: WebSocket) -> None:
                                     if resp is None and last_exc:
                                         raise last_exc
                                     text = extract_text_from_gemini_response(resp)
-                                    await websocket.send_json({"type": "segment_transcript_gemini", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
+                                    msg = {"type": "segment_transcript_gemini", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
+                                    await websocket.send_json(msg)
+                                    try:
+                                        await sse_publish(msg)
+                                    except Exception:
+                                        pass
                                 except Exception as e:
                                     print(f"WS error gemini segment: {e}")
                             asyncio.create_task(do_gemini(segment_index, seg_bytes, seg_ext))
@@ -220,7 +287,12 @@ async def ws_handler(websocket: WebSocket) -> None:
                                 try:
                                     # Placeholder returns empty string; can be expanded to S3+job flow
                                     text = aws_transcribe.recognize_segment_placeholder(b, media_format=("ogg" if ext=="ogg" else "webm"))
-                                    await websocket.send_json({"type": "segment_transcript_aws", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
+                                    msg = {"type": "segment_transcript_aws", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
+                                    await websocket.send_json(msg)
+                                    try:
+                                        await sse_publish(msg)
+                                    except Exception:
+                                        pass
                                 except Exception as e:
                                     print(f"WS error aws segment: {e}")
                             asyncio.create_task(do_aws(segment_index, seg_bytes, seg_ext))
