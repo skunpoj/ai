@@ -149,7 +149,7 @@ document.addEventListener('DOMContentLoaded', () => {
         stopRecordingButton.disabled = false;
         startTranscribeButton.disabled = false; // allow transcribe only during recording
         stopTranscribeButton.disabled = true;
-        transcriptionElement.innerText = "Transcription: ";
+        transcriptionElement.innerText = "";
         // Do NOT clear previous recordings; new recording gets its own tab
         if (chunkContainer) chunkContainer.innerHTML = '';
         if (liveTranscriptContainer) liveTranscriptContainer.innerHTML = '';
@@ -318,7 +318,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (td) td.textContent = currentRecording.transcripts.google[segIndex] || '';
                         }
                         const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="google"]`);
-                        if (full) full.textContent = currentRecording.fullAppend.google || '';
+                        if (full) {
+                            full.textContent = currentRecording.fullAppend.google || '';
+                            const fs = document.getElementById(`fullstatus-${currentRecording.id}`);
+                            if (fs) fs.style.display = 'none';
+                        }
                     }
                 } else if (data.type === 'segment_transcript_vertex') {
                     const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
@@ -335,7 +339,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (td) td.textContent = currentRecording.transcripts.vertex[segIndex] || '';
                         }
                         const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="vertex"]`);
-                        if (full) full.textContent = currentRecording.fullAppend.vertex || '';
+                        if (full) {
+                            full.textContent = currentRecording.fullAppend.vertex || '';
+                            const fs = document.getElementById(`fullstatus-${currentRecording.id}`);
+                            if (fs) fs.style.display = 'none';
+                        }
                     }
                 } else if (data.type === 'segment_transcript_gemini') {
                     const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
@@ -352,7 +360,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (td) td.textContent = currentRecording.transcripts.gemini[segIndex] || '';
                         }
                         const full = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="gemini"]`);
-                        if (full) full.textContent = currentRecording.fullAppend.gemini || '';
+                        if (full) {
+                            full.textContent = currentRecording.fullAppend.gemini || '';
+                            const fs = document.getElementById(`fullstatus-${currentRecording.id}`);
+                            if (fs) fs.style.display = 'none';
+                        }
                     }
                 } else if (data.type === 'saved') {
                     // Server finalized and saved the recording file
@@ -364,8 +376,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Update download link and size inline
                         const meta = document.getElementById(`recordmeta-${currentRecording.id}`);
                         if (meta) {
-                            const sizeLabel = (currentRecording.serverSizeBytes ? currentRecording.serverSizeBytes : currentRecording.clientSizeBytes) || 0;
-                            meta.innerHTML = `${currentRecording.audioUrl ? `<audio controls src="${currentRecording.audioUrl}"></audio>` : ''} ${currentRecording.serverUrl ? `<a href="${currentRecording.serverUrl}" download>Download</a>` : ''}`;
+                            const size = (typeof currentRecording.serverSizeBytes === 'number' && currentRecording.serverSizeBytes > 0) ? currentRecording.serverSizeBytes : currentRecording.clientSizeBytes || 0;
+                            const human = size >= 1048576 ? `${(size/1048576).toFixed(1)} MB` : (size >= 1024 ? `${Math.round(size/1024)} KB` : `${size} B`);
+                            meta.innerHTML = `${currentRecording.audioUrl ? `<audio controls src="${currentRecording.audioUrl}"></audio>` : ''} ${currentRecording.serverUrl ? `<a href="${currentRecording.serverUrl}" download>Download</a>` : ''} ${size ? `(${human})` : ''}`;
                         }
                     }
                     if (savedCloseTimer) {
@@ -379,8 +392,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (data.type === 'pong') {
                     connStatus.innerText = `WebSocket: pong (${data.ts})`;
                 } else if (data.type === 'status') {
-                    // Show server-side status messages (e.g., "Transcribing...")
-                    transcriptionElement.innerText = `Transcription: ${data.message}`;
+                    // Redundant, indicator lives near full record title
                 } else if (data.type === 'auth') {
                     const ready = !!data.ready;
                     const info = data.info || {};
