@@ -51,13 +51,16 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   tr.setAttribute('hx-swap', 'outerHTML');
   tr.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(record), idx: segIndex }));
   const audioCell = document.createElement('td');
+  audioCell.style.padding = '0';
   const sizeLabel = data.size ? `(${(data.size/1024).toFixed(0)} KB)` : '';
   const mime = (data.url && data.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
   const sizeHtml = sizeLabel ? `<small id="segsize-${record.id}-${segIndex}" data-load-full="${data.url || ''}" style="cursor:pointer">${sizeLabel}</small>` : '';
   audioCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
   const startCell = document.createElement('td');
+  startCell.style.padding = '0';
   startCell.textContent = formatElapsed(startMs - (record.startTs || startMs));
   const endCell = document.createElement('td');
+  endCell.style.padding = '0';
   endCell.textContent = formatElapsed(endMs - (record.startTs || endMs));
   tr.appendChild(audioCell);
   tr.appendChild(startCell);
@@ -66,6 +69,7 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
     const services = await getServicesCached();
     services.filter(s => s.enabled).forEach(s => {
       const td = document.createElement('td');
+      td.style.padding = '0';
       td.setAttribute('data-svc', s.key);
       td.textContent = 'transcribing…';
       tr.appendChild(td);

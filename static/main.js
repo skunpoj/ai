@@ -394,7 +394,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 connStatus.innerText = 'WebSocket: open';
                 startTranscribeButton.disabled = false;
-                stopTranscribeButton.disabled = false;
+                stopTranscribeButton.disabled = true;
                 if (autoTranscribeToggle && autoTranscribeToggle.checked) {
                     try { sendJSON(socket, { type: 'transcribe', enabled: true }); } catch(_) {}
                     startTranscribeButton.style.display = 'none';
@@ -402,6 +402,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else {
                     startTranscribeButton.style.display = '';
                     stopTranscribeButton.style.display = '';
+                    // ensure default disabled state for stop when auto is off
+                    stopTranscribeButton.disabled = true;
                 }
                 try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); } catch (e) { console.warn('Frontend: start on open failed:', e); }
                 startSegmentLoop();
@@ -618,6 +620,9 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 startTranscribeButton.style.display = '';
                 stopTranscribeButton.style.display = '';
+                // ensure stop is disabled until explicit start click
+                stopTranscribeButton.disabled = true;
+                startTranscribeButton.disabled = false;
             }
         };
         autoTranscribeToggle.addEventListener('change', applyAutoState);

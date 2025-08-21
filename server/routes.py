@@ -101,7 +101,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         THead(full_header),
         TBody(full_row),
         border="0",
-        cellpadding="4",
+        cellpadding="0",
         cellspacing="0",
         style="border-collapse:collapse; border:0; width:100%",
         id=f"fulltable-{record.get('id','')}",
@@ -127,7 +127,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         THead(seg_header),
         TBody(*seg_rows, id=f"segtbody-{record.get('id','')}") ,
         border="0",
-        cellpadding="4",
+        cellpadding="0",
         cellspacing="0",
         style="border-collapse:collapse; border:0; width:100%",
         id=f"segtable-{record.get('id','')}"

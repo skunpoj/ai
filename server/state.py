@@ -77,15 +77,18 @@ class AppState:
                 private_key_id = creds_json.get("private_key_id")
                 project_id = creds_json.get("project_id")
 
-                def mask(val: Optional[str]) -> str:
-                    if not val or len(val) < 8:
+                def short(val: Optional[str], lead: int = 2) -> str:
+                    try:
+                        if not val:
+                            return "***"
+                        return (val[:lead] + "***") if len(val) > lead else val
+                    except Exception:
                         return "***"
-                    return f"{val[:4]}...{val[-4:]}"
 
                 self.auth_info = {
-                    "project_id": project_id or "",
-                    "client_email_masked": (client_email[:3] + "...@" + client_email.split("@")[-1]) if client_email and "@" in client_email else "***",
-                    "private_key_id_masked": mask(private_key_id),
+                    "project_id": short(project_id, 2),
+                    "client_email_masked": short((client_email or '').split('@')[0], 2) + ("@" + (client_email.split("@")[-1] if (client_email and "@" in client_email) else "***")),
+                    "private_key_id_masked": short(private_key_id, 2),
                 }
             except Exception:
                 self.auth_info = None

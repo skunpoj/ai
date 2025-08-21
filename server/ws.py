@@ -251,7 +251,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                             asyncio.create_task(do_vertex(segment_index, seg_bytes, seg_ext))
                         # Dispatch Gemini API per-segment if available
                         if transcribe_enabled and service_enabled("gemini") and app_state.gemini_model is not None:
-                            print(f"WS dispatch: gemini idx={segment_index} ext={seg_ext}")
+                            print(f"WS dispatch: gemini idx={segment_index} ext={seg_ext} bytes={len(seg_bytes)}")
                             async def do_gemini(idx: int, b: bytes, ext: str):
                                 try:
                                     order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
@@ -270,6 +270,18 @@ async def ws_handler(websocket: WebSocket) -> None:
                                     if resp is None and last_exc:
                                         raise last_exc
                                     text = extract_text_from_gemini_response(resp)
+                                    try:
+                                        sz = 0
+                                        try:
+                                            if hasattr(resp, 'to_dict'):
+                                                sz = len(str(resp.to_dict()))
+                                            else:
+                                                sz = len(str(resp))
+                                        except Exception:
+                                            pass
+                                        print(f"WS gemini idx={idx} mt={order[0]} resp_len={sz} text_len={len(text)}")
+                                    except Exception:
+                                        pass
                                     msg = {"type": "segment_transcript_gemini", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
                                     await websocket.send_json(msg)
                                     try:
