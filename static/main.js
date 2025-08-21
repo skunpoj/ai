@@ -693,67 +693,128 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('beforeunload', () => { try { if (socket && socket.readyState === WebSocket.OPEN) socket.close(); } catch(_) {} });
     console.log('Frontend: DOMContentLoaded - Ready for interaction.');
 
-    // Wire SSE (Server-Sent Events) to trigger HTMX fragment refreshes
+    // SSE -> HTMX triggers
     try {
         const es = new EventSource('/events');
+        const triggerFull = (rec) => {
+            const fullEl = document.getElementById(`fulltable-${rec.id}`);
+            if (fullEl) htmx.trigger(fullEl, 'refresh-full', { detail: { record: JSON.stringify(rec) } });
+        };
+        const triggerRow = (rec, idx) => {
+            const row = document.getElementById(`segrow-${rec.id}-${idx}`);
+            if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(rec), idx } });
+        };
         es.addEventListener('segment_saved', async (e) => {
-            try {
-                const data = JSON.parse(e.data || '{}');
-                if (!currentRecording) return;
-                const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
-                const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
-                const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
-                currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
-                const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
-                const rowId = `segrow-${currentRecording.id}-${segIndex}`;
-                let row = document.getElementById(rowId);
-                if (!row && tbody) {
-                    row = document.createElement('tr');
-                    row.id = rowId;
-                    row.setAttribute('hx-post', '/render/segment_row');
-                    row.setAttribute('hx-trigger', 'refresh-row');
-                    row.setAttribute('hx-target', 'this');
-                    row.setAttribute('hx-swap', 'outerHTML');
-                    row.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
-                    // minimal placeholder cells so the row is visible before swap
-                    row.innerHTML = '<td></td><td></td><td></td>';
-                    // remove pending countdown row if present, then insert new row at top
-                    const pending = document.getElementById(`segpending-${currentRecording.id}`);
-                    if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
-                    tbody.insertBefore(row, tbody.firstChild);
-                }
-                // Trigger HTMX refresh on this row
-                const target = document.getElementById(rowId);
-                if (target) htmx.trigger(target, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
-            } catch(_) {}
+            const data = JSON.parse(e.data || '{}');
+            if (!currentRecording) return;
+            const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+            while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
+            const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
+            const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
+            currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
+            const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
+            const rowId = `segrow-${currentRecording.id}-${segIndex}`;
+            if (!document.getElementById(rowId) && tbody) {
+                const tr = document.createElement('tr');
+                tr.id = rowId;
+                tr.setAttribute('hx-post', '/render/segment_row');
+                tr.setAttribute('hx-trigger', 'refresh-row');
+                tr.setAttribute('hx-target', 'this');
+                tr.setAttribute('hx-swap', 'outerHTML');
+                tr.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
+                tr.innerHTML = '<td></td><td></td><td></td>';
+                const pending = document.getElementById(`segpending-${currentRecording.id}`);
+                if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
+                tbody.insertBefore(tr, tbody.firstChild);
+            }
+            triggerRow(currentRecording, segIndex);
         });
         es.addEventListener('saved', (e) => {
+            const data = JSON.parse(e.data || '{}');
+            const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || recordings[recordings.length - 1]);
+            if (!rec) return;
+            if (data.url) rec.serverUrl = data.url;
+            if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
+            triggerFull(rec);
+        });
+        ['segment_transcript_google','segment_transcript_vertex','segment_transcript_gemini','segment_transcript_aws'].forEach(evt => {
+            es.addEventListener(evt, (e) => {
+                try {
+                    const data = JSON.parse(e.data || '{}');
+                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                    if (!currentRecording) return;
+                    triggerRow(currentRecording, segIndex);
+                } catch(_) {}
+            });
+        });
+    } catch(_) {}
+
+    // Test Transcribe wiring (Settings UI)
+    try {
+        const testAudio = document.getElementById('testAudio');
+        const testUpload = document.getElementById('testUpload');
+        const testRun = document.getElementById('testRun');
+        const testRecord2s = document.getElementById('testRecord2s');
+        const testResults = document.getElementById('testResults');
+        let testBlob = null;
+        // Load a built-in sample if present under static (optional)
+        if (testAudio && !testAudio.src) {
+            // you can place a sample at /static/sample.ogg; if missing, ignore
+            testAudio.src = '/static/sample.ogg';
+        }
+        if (testUpload) testUpload.addEventListener('change', async (e) => {
             try {
-                const data = JSON.parse(e.data || '{}');
-                const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || recordings[recordings.length - 1]);
-                if (rec) {
-                    if (data.url) rec.serverUrl = data.url;
-                    if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
-                    const fullEl = document.getElementById(`fulltable-${rec.id}`);
-                    if (fullEl) htmx.trigger(fullEl, 'refresh-full', { detail: { record: JSON.stringify(rec) } });
-                }
+                const f = e.target.files && e.target.files[0];
+                if (!f) return;
+                testBlob = f;
+                if (testAudio) testAudio.src = URL.createObjectURL(f);
+                if (testResults) testResults.textContent = 'Loaded custom audio.';
             } catch(_) {}
         });
-        // transcripts events simply trigger row refresh if row exists
-        const txHandler = (svc) => (e) => {
+        if (testRecord2s) testRecord2s.addEventListener('click', async () => {
             try {
-                const data = JSON.parse(e.data || '{}');
-                const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                if (!currentRecording) return;
-                const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
-                if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const rec = new MediaRecorder(stream);
+                const chunks = [];
+                rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+                rec.onstop = () => {
+                    testBlob = new Blob(chunks, { type: 'audio/webm' });
+                    if (testAudio) testAudio.src = URL.createObjectURL(testBlob);
+                    if (testResults) testResults.textContent = 'Recorded 2s sample.';
+                };
+                rec.start();
+                setTimeout(() => { try { rec.stop(); } catch(_) {} }, 2000);
             } catch(_) {}
-        };
-        es.addEventListener('segment_transcript_google', txHandler('google'));
-        es.addEventListener('segment_transcript_vertex', txHandler('vertex'));
-        es.addEventListener('segment_transcript_gemini', txHandler('gemini'));
-        es.addEventListener('segment_transcript_aws', txHandler('aws'));
+        });
+        if (testRun) testRun.addEventListener('click', async () => {
+            try {
+                if (!testBlob && testAudio && testAudio.src) {
+                    // fetch from audio element if playing a sample
+                    const r = await fetch(testAudio.src);
+                    testBlob = await r.blob();
+                }
+                if (!testBlob) { if (testResults) testResults.textContent = 'No audio selected.'; return; }
+                const buf = await testBlob.arrayBuffer();
+                const b64 = arrayBufferToBase64(buf);
+                const mime = (testBlob.type || 'audio/webm');
+                const res = await fetch('/test_transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio_b64: b64, mime }) });
+                const data = await res.json();
+                if (data && data.ok) {
+                    const parts = [];
+                    if (data.results.google) parts.push(`Google: ${data.results.google}`);
+                    if (data.results.vertex) parts.push(`Vertex: ${data.results.vertex}`);
+                    if (data.results.gemini) parts.push(`Gemini: ${data.results.gemini}`);
+                    if (data.results.google_error) parts.push(`Google error: ${data.results.google_error}`);
+                    if (data.results.vertex_error) parts.push(`Vertex error: ${data.results.vertex_error}`);
+                    if (data.results.gemini_error) parts.push(`Gemini error: ${data.results.gemini_error}`);
+                    if (testResults) testResults.textContent = parts.join(' | ') || 'No result';
+                } else {
+                    if (testResults) testResults.textContent = `Test failed: ${(data && data.error) || 'unknown'}`;
+                }
+            } catch(err) {
+                if (testResults) testResults.textContent = `Test failed: ${err && err.message ? err.message : 'network'}`;
+            }
+        });
     } catch(_) {}
 });
 

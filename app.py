@@ -23,6 +23,7 @@ from server.routes import build_index, render_panel, render_segment_row, render_
 from server.ws import ws_handler
 from server.services.registry import list_services as registry_list, set_service_enabled
 from server.sse_bus import stream as sse_stream
+from server.routes import _b64_to_bytes
 from typing import Any, List, Dict
 from starlette.responses import JSONResponse, HTMLResponse
 import json
@@ -154,6 +155,79 @@ def render_full_row_route(record: str = '') -> Any:
 async def sse_events() -> Any:
     from starlette.responses import StreamingResponse
     return StreamingResponse(sse_stream(), media_type="text/event-stream")
+
+@rt("/test_transcribe", methods=["POST"])
+async def test_transcribe(audio_b64: str = "", mime: str = "") -> Any:
+    from starlette.responses import JSONResponse
+    try:
+        raw = _b64_to_bytes(audio_b64)
+        if not raw:
+            return JSONResponse({"ok": False, "error": "no_audio"})
+        # very small helper to invoke enabled providers synchronously for a short clip
+        results = {}
+        try:
+            from server.services.registry import is_enabled as svc_enabled
+            from server.state import app_state
+            from server.services.google_stt import recognize_segment as recognize_google_segment
+            from server.services.vertex_gemini import build_vertex_contents, extract_text_from_vertex_response
+            from server.services.vertex_langchain import is_available as lc_vertex_available, transcribe_segment_via_langchain
+            from server.services.gemini_api import extract_text_from_gemini_response
+            # Google
+            if svc_enabled("google") and app_state.speech_client is not None:
+                try:
+                    results["google"] = await recognize_google_segment(app_state.speech_client, raw, ("ogg" if "ogg" in (mime or "").lower() else "webm"))
+                except Exception as e:
+                    results["google_error"] = str(e)
+            # Vertex
+            if svc_enabled("vertex") and app_state.vertex_client is not None:
+                try:
+                    order = ["audio/ogg", "audio/webm"] if ("ogg" in (mime or "").lower()) else ["audio/webm", "audio/ogg"]
+                    text = ""
+                    if lc_vertex_available():
+                        for mt in order:
+                            text = transcribe_segment_via_langchain(app_state.vertex_client, app_state.vertex_model_name, raw, mt)
+                            if text: break
+                    else:
+                        resp = None
+                        last_exc = None
+                        for mt in order:
+                            try:
+                                resp = app_state.vertex_client.models.generate_content(model=app_state.vertex_model_name, contents=build_vertex_contents(raw, mt))
+                                break
+                            except Exception as ie:
+                                last_exc = ie
+                                continue
+                        if resp is None and last_exc: raise last_exc
+                        text = extract_text_from_vertex_response(resp)
+                    results["vertex"] = text
+                except Exception as e:
+                    results["vertex_error"] = str(e)
+            # Gemini API
+            if svc_enabled("gemini") and app_state.gemini_model is not None:
+                try:
+                    order = ["audio/ogg", "audio/webm"] if ("ogg" in (mime or "").lower()) else ["audio/webm", "audio/ogg"]
+                    resp = None
+                    last_exc = None
+                    for mt in order:
+                        try:
+                            resp = app_state.gemini_model.generate_content([
+                                {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
+                                {"mime_type": mt, "data": raw}
+                            ])
+                            break
+                        except Exception as ie:
+                            last_exc = ie
+                            continue
+                    if resp is None and last_exc: raise last_exc
+                    results["gemini"] = extract_text_from_gemini_response(resp)
+                except Exception as e:
+                    results["gemini_error"] = str(e)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"server_error: {e}"})
+        return JSONResponse({"ok": True, "results": results})
+    except Exception as e:
+        from starlette.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": f"server_error: {e}"})
 
 serve()
 
