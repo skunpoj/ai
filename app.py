@@ -87,12 +87,21 @@ def update_service(req: Any) -> Any:
         return JSONResponse(registry_list())
 
 @rt("/gemini_api_key", methods=["POST"])
-def set_gemini_key(req: Any) -> Any:
+def set_gemini_key() -> Any:
+    # Be lenient: accept JSON or form data and avoid throwing 400 to the client
     try:
-        data = req.json()
-        key = str(data.get("api_key") or "").strip()
-        ok = app_state.set_gemini_api_key(key)
-        # Optionally enable gemini service when key is set successfully
+        try:
+            data = req.json()
+        except Exception:
+            data = req.form()
+        key_val = ""
+        if isinstance(data, dict):
+            key_val = str(data.get("api_key") or data.get("key") or "").strip()
+        elif isinstance(data, str):
+            key_val = data.strip()
+        if not key_val:
+            return JSONResponse({"ok": False, "error": "Missing api_key"})
+        ok = app_state.set_gemini_api_key(key_val)
         if ok:
             try:
                 set_service_enabled("gemini", True)
@@ -104,7 +113,8 @@ def set_gemini_key(req: Any) -> Any:
             "enabled": ok
         })
     except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        # Return ok:false without surfacing a 400 to keep frontend UX clean
+        return JSONResponse({"ok": False, "error": f"server_error: {e}"})
 
 
 @app.ws("/ws_stream") # Dedicated WebSocket endpoint for audio streaming
