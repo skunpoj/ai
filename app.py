@@ -87,10 +87,10 @@ def update_service(req: Any) -> Any:
         return JSONResponse(registry_list())
 
 @rt("/gemini_api_key", methods=["POST"])
-def set_gemini_key(api_key: str = '', key: str = '') -> Any:
+def set_gemini_key(api_key: str = '') -> Any:
     # FastHTML will map form/JSON fields into function args when named; avoid requiring req
     try:
-        key_val = (api_key or key or '').strip()
+        key_val = (api_key or '').strip()
         if not key_val:
             return JSONResponse({"ok": False, "error": "Missing api_key"})
         ok = app_state.set_gemini_api_key(key_val)

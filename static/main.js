@@ -500,6 +500,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                     tr.appendChild(td);
                                 });
                             } catch(_) {}
+                            // Remove pending countdown row if present, then insert new row at top
+                            const pending = document.getElementById(`segpending-${currentRecording.id}`);
+                            if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
                             tbody.insertBefore(tr, tbody.firstChild);
                             // Schedule timeouts per enabled service so placeholders don't stay forever
                             scheduleSegmentTimeouts(currentRecording.id, segIndex);
@@ -713,16 +716,34 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (segmentLoopActive) setTimeout(loopOnce, 0);
                     };
                     try { segmentRecorder.start(); } catch (e) { console.warn('Frontend: segmentRecorder start failed:', e); segmentLoopActive = false; return; }
-                    // Live countdown for this segment
+                    // Live countdown for this segment in a pending top row within the segments table
                     try {
-                        const countdownEl = document.getElementById(`segcount-${currentRecording.id}`);
-                        if (countdownEl) {
+                        const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
+                        if (tbody) {
+                            const pendingId = `segpending-${currentRecording.id}`;
+                            let tr = document.getElementById(pendingId);
+                            if (!tr) {
+                                tr = document.createElement('tr');
+                                tr.id = pendingId;
+                                const td = document.createElement('td');
+                                // Span across all columns while pending
+                                const segTable = document.getElementById(`segtable-${currentRecording.id}`);
+                                let colCount = 4;
+                                try {
+                                    if (segTable) colCount = Math.max(1, segTable.querySelectorAll('thead th').length);
+                                } catch(_) {}
+                                td.setAttribute('colspan', String(colCount));
+                                tr.appendChild(td);
+                                tbody.insertBefore(tr, tbody.firstChild);
+                            }
                             const start = Date.now();
                             const tick = () => {
-                                if (!segmentLoopActive || !countdownEl) return;
+                                const node = document.getElementById(pendingId);
+                                if (!segmentLoopActive || !node) return;
                                 const elapsed = Date.now() - start;
                                 const remaining = Math.max(0, Math.ceil((segmentMs - elapsed) / 1000));
-                                countdownEl.textContent = `Recording for ${remaining} seconds...`;
+                                const firstCell = node.firstChild;
+                                if (firstCell) firstCell.textContent = `Recording for ${remaining} seconds...`;
                                 if (elapsed < segmentMs && segmentRecorder && segmentRecorder.state === 'recording') {
                                     requestAnimationFrame(tick);
                                 }
