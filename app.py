@@ -87,26 +87,33 @@ def update_service(req: Any) -> Any:
         return JSONResponse(registry_list())
 
 @rt("/gemini_api_key", methods=["POST"])
-def set_gemini_key() -> Any:
+def set_gemini_key(req: Any) -> Any:
     # Be lenient: accept JSON or form data and avoid throwing 400 to the client
     try:
+        print("/gemini_api_key: received request")
         try:
             data = req.json()
         except Exception:
-            data = req.form()
+            try:
+                data = req.form()
+            except Exception:
+                data = {}
+        print(f"/gemini_api_key: parsed body type={type(data)}")
         key_val = ""
         if isinstance(data, dict):
             key_val = str(data.get("api_key") or data.get("key") or "").strip()
         elif isinstance(data, str):
             key_val = data.strip()
         if not key_val:
+            print("/gemini_api_key: missing api_key")
             return JSONResponse({"ok": False, "error": "Missing api_key"})
         ok = app_state.set_gemini_api_key(key_val)
+        print(f"/gemini_api_key: set key result ok={ok}")
         if ok:
             try:
                 set_service_enabled("gemini", True)
-            except Exception:
-                pass
+            except Exception as se:
+                print(f"/gemini_api_key: error enabling service registry: {se}")
         return JSONResponse({
             "ok": ok,
             "masked": app_state.gemini_api_key_masked,
@@ -114,6 +121,7 @@ def set_gemini_key() -> Any:
         })
     except Exception as e:
         # Return ok:false without surfacing a 400 to keep frontend UX clean
+        print(f"/gemini_api_key: server error: {e}")
         return JSONResponse({"ok": False, "error": f"server_error: {e}"})
 
 

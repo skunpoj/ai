@@ -60,16 +60,16 @@ def build_segment_modal() -> Any:
                 style="margin-bottom:8px"
             ),
             Div(
-                Input(type="text", id="geminiApiKey", placeholder="Enter Gemini API Key", style="min-width:200px;margin-right:8px"),
-                Button("Use Key", id="useGeminiKey"),
-                style="margin-bottom:8px;display:flex;align-items:center"
+                Input(type="text", id="geminiApiKey", placeholder="Enter Gemini API Key", style="flex:1;min-width:200px;margin-right:8px;display:inline-block"),
+                Button("Apply", id="useGeminiKey", style="display:inline-block;margin:0"),
+                style="margin-bottom:8px;display:flex;align-items:center;gap:8px"
             ),
             id="providerCheckboxes"
         ),
         Div(Button("Check Connection", id="testConnection"), P("WebSocket: not connected", id="connStatus"))
     )
     content = Div(
-        H3("Recording Options"),
+        H3("Settings"),
         len_group,
         provider_checks,
         Div(Button("OK", id="okSegmentModal"), style="text-align:center;margin-top:8px"),
@@ -92,7 +92,7 @@ def build_index():
             Div(
                 Button("Start Recording", id="startRecording"),
                 Button("Stop Recording", id="stopRecording", disabled=True),
-                Button("Recording Options", id="openSegmentModal"),
+                Button("Settings", id="openSegmentModal"),
             # ),
             # Div(
                 Input(type="checkbox", id="autoTranscribeToggle", checked=True),
@@ -135,7 +135,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
 
     # Full record section (no 'Transcribing…' indicator)
     full_header = Tr(*[Th(s["label"]) for s in services])
-    full_row = Tr(*[Td((record.get("fullAppend", {}) or {}).get(s["key"], "")) for s in services], id=f"fullrow-{record.get('id','')}")
+    full_row = Tr(*[Td(((record.get("fullAppend", {}) or {}).get(s["key"], "")), data_svc=s["key"]) for s in services], id=f"fullrow-{record.get('id','')}")
     full_table = Table(
         THead(full_header),
         TBody(full_row),
@@ -263,7 +263,7 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
     for s in services:
         arr = transcripts.get(s["key"], []) or []
         txt = arr[idx] if idx < len(arr) else ""
-        svc_cells.append(Td(txt or "transcribing…"))
+        svc_cells.append(Td(txt or "transcribing…", data_svc=s["key"]))
     import json as __json
     return Tr(
         seg_cell,
