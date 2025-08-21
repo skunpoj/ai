@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 from fasthtml.common import *
 from server.config import CHUNK_MS, SEGMENT_MS_DEFAULT
 from server.state import app_state
-from server.services.registry import list_services as registry_list
+from server.services.registry import list_services as registry_list, set_service_enabled
 from starlette.responses import HTMLResponse
 import hashlib
 import json as _json
@@ -35,19 +35,29 @@ def build_segment_modal() -> Any:
     provider_checks = Div(
         H3("Providers"),
         Div(
-            Input(type="checkbox", id="svc_google"), Label("Google STT", _for="svc_google"),
-            Input(type="checkbox", id="svc_vertex", checked=True), Label("Gemini Vertex", _for="svc_vertex"),
-            Input(type="checkbox", id="svc_gemini"), Label("Gemini API", _for="svc_gemini"),
-            Input(type="checkbox", id="svc_aws"), Label("AWS (beta)", _for="svc_aws"),
-            id="providerCheckboxes", style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px"
+            Input(type="checkbox", id="svc_aws"),
+            Label("AWS (beta)", _for="svc_aws", id="lbl_aws", style="cursor:pointer"),
+            Small("", id="cred_aws", style="margin-left:6px;color:#aaa"),
+            Input(type="checkbox", id="svc_gemini"),
+            Label("Gemini API", _for="svc_gemini", id="lbl_gemini", style="cursor:pointer"),
+            Small("", id="cred_gemini", style="margin-left:6px;color:#aaa"),
+            Input(type="text", id="geminiApiKey", placeholder="Enter Gemini API Key", style="min-width:260px"),
+            Button("Use Key", id="useGeminiKey"),
+            Input(type="checkbox", id="svc_google"),
+            Label("Google STT", _for="svc_google", id="lbl_google", style="cursor:pointer"),
+            Small("", id="cred_google", style="margin-left:6px;color:#aaa"),
+            Input(type="checkbox", id="svc_vertex", checked=True),
+            Label("Gemini Vertex", _for="svc_vertex", id="lbl_vertex", style="cursor:pointer"),
+            Small("", id="cred_vertex", style="margin-left:6px;color:#aaa"),
+            id="providerCheckboxes", style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;row-gap:8px;margin-bottom:8px"
         ),
         Div(Button("Check Connection", id="testConnection"), P("WebSocket: not connected", id="connStatus"))
     )
     content = Div(
-        H3("Settings"),
+        H3("Recording Options"),
         len_group,
         provider_checks,
-        Button("OK", id="okSegmentModal"),
+        Div(Button("OK", id="okSegmentModal"), style="text-align:center;margin-top:8px"),
         id="segmentModalContent",
         style="background:#222;padding:16px;border:1px solid #444;max-width:520px;margin:10% auto",
     )
@@ -67,7 +77,7 @@ def build_index():
             Div(
                 Button("Start Recording", id="startRecording"),
                 Button("Stop Recording", id="stopRecording", disabled=True),
-                Button("Setting", id="openSegmentModal"),
+                Button("Recording Options", id="openSegmentModal"),
             # ),
             # Div(
                 Input(type="checkbox", id="autoTranscribeToggle", checked=True),
@@ -163,8 +173,13 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     if record.get("serverUrl"):
         player_bits.append(Space(" "))
         player_bits.append(A("Download", href=record["serverUrl"], download=True))
+    size_bytes = 0
     if isinstance(record.get("serverSizeBytes"), int) and record["serverSizeBytes"] > 0:
-        kb = int(record["serverSizeBytes"]/1024)
+        size_bytes = record["serverSizeBytes"]
+    elif isinstance(record.get("clientSizeBytes"), int) and record["clientSizeBytes"] > 0:
+        size_bytes = record["clientSizeBytes"]
+    if size_bytes > 0:
+        kb = int(size_bytes/1024)
         player_bits.append(Space(f" ({kb} KB)"))
     # Ensure the meta container has a predictable id for live updates
     player_div = Div(*player_bits, style="margin-bottom:8px", id=f"recordmeta-{record.get('id','')}")
