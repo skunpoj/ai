@@ -169,8 +169,14 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     panel = Div(
         hdr,
         player_div,
-        Div(H3("Full Record"), full_table),
-        Div(H3("Segments"), seg_table, style="margin-top:12px")
+        Div(
+            # H3("Full Record"),
+            full_table
+            ),
+        Div(
+            H3("Segments"),
+            seg_table,
+            style="margin-top:12px")
     )
     return str(panel)
 
