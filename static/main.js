@@ -693,60 +693,67 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('beforeunload', () => { try { if (socket && socket.readyState === WebSocket.OPEN) socket.close(); } catch(_) {} });
     console.log('Frontend: DOMContentLoaded - Ready for interaction.');
 
-    // SSE -> HTMX triggers
+    // Wire SSE (Server-Sent Events) to trigger HTMX fragment refreshes
     try {
         const es = new EventSource('/events');
-        const triggerFull = (rec) => {
-            const fullEl = document.getElementById(`fulltable-${rec.id}`);
-            if (fullEl) htmx.trigger(fullEl, 'refresh-full', { detail: { record: JSON.stringify(rec) } });
-        };
-        const triggerRow = (rec, idx) => {
-            const row = document.getElementById(`segrow-${rec.id}-${idx}`);
-            if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(rec), idx } });
-        };
         es.addEventListener('segment_saved', async (e) => {
-            const data = JSON.parse(e.data || '{}');
-            if (!currentRecording) return;
-            const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-            while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
-            const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
-            const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
-            currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
-            const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
-            const rowId = `segrow-${currentRecording.id}-${segIndex}`;
-            if (!document.getElementById(rowId) && tbody) {
-                const tr = document.createElement('tr');
-                tr.id = rowId;
-                tr.setAttribute('hx-post', '/render/segment_row');
-                tr.setAttribute('hx-trigger', 'refresh-row');
-                tr.setAttribute('hx-target', 'this');
-                tr.setAttribute('hx-swap', 'outerHTML');
-                tr.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
-                tr.innerHTML = '<td></td><td></td><td></td>';
-                const pending = document.getElementById(`segpending-${currentRecording.id}`);
-                if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
-                tbody.insertBefore(tr, tbody.firstChild);
-            }
-            triggerRow(currentRecording, segIndex);
+            try {
+                const data = JSON.parse(e.data || '{}');
+                if (!currentRecording) return;
+                const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
+                const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
+                const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
+                currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
+                const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
+                const rowId = `segrow-${currentRecording.id}-${segIndex}`;
+                let row = document.getElementById(rowId);
+                if (!row && tbody) {
+                    row = document.createElement('tr');
+                    row.id = rowId;
+                    row.setAttribute('hx-post', '/render/segment_row');
+                    row.setAttribute('hx-trigger', 'refresh-row');
+                    row.setAttribute('hx-target', 'this');
+                    row.setAttribute('hx-swap', 'outerHTML');
+                    row.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
+                    // minimal placeholder cells so the row is visible before swap
+                    row.innerHTML = '<td></td><td></td><td></td>';
+                    // remove pending countdown row if present, then insert new row at top
+                    const pending = document.getElementById(`segpending-${currentRecording.id}`);
+                    if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
+                    tbody.insertBefore(row, tbody.firstChild);
+                }
+                // Trigger HTMX refresh on this row
+                const target = document.getElementById(rowId);
+                if (target) htmx.trigger(target, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
+            } catch(_) {}
         });
         es.addEventListener('saved', (e) => {
-            const data = JSON.parse(e.data || '{}');
-            const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || recordings[recordings.length - 1]);
-            if (!rec) return;
-            if (data.url) rec.serverUrl = data.url;
-            if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
-            triggerFull(rec);
+            try {
+                const data = JSON.parse(e.data || '{}');
+                const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || recordings[recordings.length - 1]);
+                if (rec) {
+                    if (data.url) rec.serverUrl = data.url;
+                    if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
+                    const fullEl = document.getElementById(`fulltable-${rec.id}`);
+                    if (fullEl) htmx.trigger(fullEl, 'refresh-full', { detail: { record: JSON.stringify(rec) } });
+                }
+            } catch(_) {}
         });
-        ['segment_transcript_google','segment_transcript_vertex','segment_transcript_gemini','segment_transcript_aws'].forEach(evt => {
-            es.addEventListener(evt, (e) => {
-                try {
-                    const data = JSON.parse(e.data || '{}');
-                    const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                    if (!currentRecording) return;
-                    triggerRow(currentRecording, segIndex);
-                } catch(_) {}
-            });
-        });
+        // transcripts events simply trigger row refresh if row exists
+        const txHandler = (svc) => (e) => {
+            try {
+                const data = JSON.parse(e.data || '{}');
+                const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                if (!currentRecording) return;
+                const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
+                if (row) htmx.trigger(row, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
+            } catch(_) {}
+        };
+        es.addEventListener('segment_transcript_google', txHandler('google'));
+        es.addEventListener('segment_transcript_vertex', txHandler('vertex'));
+        es.addEventListener('segment_transcript_gemini', txHandler('gemini'));
+        es.addEventListener('segment_transcript_aws', txHandler('aws'));
     } catch(_) {}
 
     // Test Transcribe wiring (Settings UI)

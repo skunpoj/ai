@@ -3,10 +3,10 @@ server/services/gemini_api.py
 
 Helpers for extracting text from Gemini consumer API responses.
 """
-from typing import Optional
+from typing import Any
 
 
-def extract_text_from_gemini_response(resp) -> str:
+def extract_text_from_gemini_response(resp: Any) -> str:
     try:
         return (resp.text or "").strip()
     except Exception:

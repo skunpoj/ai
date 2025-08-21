@@ -66,19 +66,15 @@ def build_settings_modal() -> Any:
             ),
             Div(
                 Input(type="file", id="testUpload", accept="audio/*"),
-                Button("Record 2s", id="testRecord2s"),
-                Button("Transcribe Test", id="testRun"),
-                style="margin-bottom:8px;display:flex;gap:8px;align-items:center"
+                Button("Record 2s", id="testRecord2s", style="margin-left:8px"),
+                Button("Transcribe Test", id="testRun", style="margin-left:8px"),
+                style="margin-bottom:8px"
             ),
             Small("Results:", style="color:#aaa"),
             Div(id="testResults", style="min-height:24px;margin-bottom:8px"),
             id="providerCheckboxes"
         ),
-        Div(
-            Button("Check Connection", id="testConnection"),
-            P("WebSocket: not connected", id="connStatus", style="margin:0"),
-            style="display:flex;gap:8px;align-items:center"
-        )
+        Div(Button("Check Connection", id="testConnection"), P("WebSocket: not connected", id="connStatus"))
     )
 
     content = Div(
@@ -87,7 +83,7 @@ def build_settings_modal() -> Any:
         provider_checks,
         Div(Button("OK", id="okSegmentModal"), style="text-align:center;margin-top:8px"),
         id="segmentModalContent",
-        style="background:#222;padding:16px;border:1px solid #444;max-width:820px;margin:10% auto",
+        style="background:#222;padding:16px;border:1px solid #444;max-width:520px;margin:10% auto",
     )
     modal = Div(
         content,

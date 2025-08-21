@@ -7,11 +7,13 @@ import time
 from google.cloud import speech
 import pyaudio
 from utils.credentials import ensure_google_credentials_from_env
+from server.config import STREAMING_LIMIT, SAMPLE_RATE, CHUNK_SIZE
+from typing import Any
 
 # Audio recording parameters
-STREAMING_LIMIT = 240000  # 4 minutes
-SAMPLE_RATE = 16000
-CHUNK_SIZE = int(SAMPLE_RATE / 10)  # 100ms
+# STREAMING_LIMIT = 240000  # 4 minutes
+# SAMPLE_RATE = 16000
+# CHUNK_SIZE = int(SAMPLE_RATE / 10)  # 100ms
 
 RED = "\033[0;31m"
 GREEN = "\033[0;32m"
@@ -32,7 +34,7 @@ class ResumableMicrophoneStream:
     """Opens a recording stream as a generator yielding the audio chunks."""
 
     def __init__(
-        self: object,
+        self: Any,
         rate: int,
         chunk_size: int,
     ) -> None:
@@ -74,8 +76,8 @@ class ResumableMicrophoneStream:
         )
 
     def __enter__(
-        self: object,
-    ) -> object:
+        self: Any,
+    ) -> Any:
         """Opens the stream.
 
         Args:
@@ -87,11 +89,11 @@ class ResumableMicrophoneStream:
         return self
 
     def __exit__(
-        self: object,
-        type: object,
-        value: object,
-        traceback: object,
-    ) -> object:
+        self: Any,
+        type: Any,
+        value: Any,
+        traceback: Any,
+    ) -> Any:
         """Closes the stream and releases resources.
 
         Args:
@@ -111,11 +113,11 @@ class ResumableMicrophoneStream:
         self._audio_interface.terminate()
 
     def _fill_buffer(
-        self: object,
-        in_data: object,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
+        self: Any,
+        in_data: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
         """Continuously collect data from the audio stream, into the buffer.
 
         Args:
@@ -129,7 +131,7 @@ class ResumableMicrophoneStream:
         self._buff.put(in_data)
         return None, pyaudio.paContinue
 
-    def generator(self: object) -> object:
+    def generator(self: Any) -> Any:
         """Stream Audio from microphone to API and to local buffer
 
         Args:
@@ -190,7 +192,7 @@ class ResumableMicrophoneStream:
             yield b"".join(data)
 
 
-def listen_print_loop(responses: object, stream: object) -> None:
+def listen_print_loop(responses: Any, stream: Any) -> None:
     """Iterates through server responses and prints them.
 
     The responses passed is a generator that will block until a response

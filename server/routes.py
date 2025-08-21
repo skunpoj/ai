@@ -14,7 +14,6 @@ from server.services.registry import list_services as registry_list, set_service
 from starlette.responses import HTMLResponse
 import hashlib
 import json as _json
-import base64
 
 
 def build_segment_modal() -> Any:
@@ -52,6 +51,7 @@ def build_index():
             Script(
                 f"window.GOOGLE_AUTH_INFO = {json.dumps(app_state.auth_info or {})};\n"
                 f"window.GOOGLE_AUTH_READY = {( 'true' if (app_state.speech_client and app_state.streaming_config) else 'false' )};\n"
+                "console.log('Frontend: Google auth on load:', { ready: window.GOOGLE_AUTH_READY, info: window.GOOGLE_AUTH_INFO });\n"
                 "try { const cg = document.getElementById('cred_google'); if (cg) { const i = window.GOOGLE_AUTH_INFO||{}; cg.textContent = `Google: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}${i.client_email_masked ? ' · ' + i.client_email_masked : ''}${i.private_key_id_masked ? ' · ' + i.private_key_id_masked : ''}`; } } catch(_) {}\n"
                 "try { const cv = document.getElementById('cred_vertex'); if (cv) { const i = window.GOOGLE_AUTH_INFO||{}; cv.textContent = `Vertex: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}${i.client_email_masked ? ' · ' + i.client_email_masked : ''}${i.private_key_id_masked ? ' · ' + i.private_key_id_masked : ''}`; } } catch(_) {}"
             ),
@@ -170,6 +170,9 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         Div(
             H3("Segments"),
             seg_table,
+            # SSE hooks for htmx to trigger fragment refreshes
+            Div(hx_sse="connect:/events event:segment_saved", hx_trigger="sse:segment_saved"),
+            Div(hx_sse="connect:/events event:saved", hx_trigger="sse:saved"),
             style="margin-top:12px")
     )
     return str(panel)
@@ -318,15 +321,4 @@ def render_full_row(req) -> Any:
     resp.headers["ETag"] = etag
     resp.headers["HX-ETag"] = etag
     return resp
-
-
-def _b64_to_bytes(data_url_or_b64: str) -> bytes:
-    try:
-        s = data_url_or_b64
-        if s.startswith("data:") and "," in s:
-            s = s.split(",",1)[1]
-        return base64.b64decode(s)
-    except Exception:
-        return b""
-
 

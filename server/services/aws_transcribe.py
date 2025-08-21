@@ -21,7 +21,7 @@ def is_available() -> bool:
     return boto3 is not None
 
 
-def recognize_segment_placeholder(segment_bytes: bytes, media_format: str = "webm", language_code: str = "en-US") -> str:
+def transcribe_segment_via_aws(segment_bytes: bytes, media_format: str = "webm", language_code: str = "en-US") -> str:
     """
     Placeholder: AWS Transcribe requires files accessible via S3 or streaming.
     To integrate properly: upload `segment_bytes` to S3, then call
