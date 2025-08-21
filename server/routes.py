@@ -201,7 +201,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
                     Tr(player_div),
                     Tr(hdr),
                 )
-            )
+            ),
             full_table
             ),
         Div(
