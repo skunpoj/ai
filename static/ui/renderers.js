@@ -31,7 +31,8 @@ export async function renderRecordingPanel(record) {
   const srcUrl = record.serverUrl || record.audioUrl || '';
   const mime = srcUrl.toLowerCase().endsWith('.ogg') ? 'audio/ogg' : 'audio/webm';
   const sizeHtml = (record.serverUrl && sizeLabel) ? `<small id="size-${record.id}" data-load-full="${record.serverUrl}" style="cursor:pointer">(${sizeLabel})</small>` : (sizeLabel ? `(${sizeLabel})` : '');
-  const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
+  const downloadIcon = record.serverUrl ? `<a href="${record.serverUrl}" download title="Download" data-load-full="${record.serverUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : '';
+  const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${downloadIcon} ${sizeHtml}`;
 
   // Fetch current services dynamically from backend
   const services = (await getServices()).filter(s => !!s.enabled);

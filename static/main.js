@@ -438,6 +438,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     };
                     const handleTranscript = (msg) => {
                         try {
+                            if (!msg.transcript && !msg.error) console.log(`[WS:${msg.type}] empty result`, msg);
+                            if (msg.error) console.log(`[WS:${msg.type}] error`, msg.error);
                             if (!currentRecording) return;
                             const segIndex = (typeof msg.idx === 'number') ? msg.idx : msg.id;
                             const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
@@ -851,6 +853,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const txHandler = (svc) => (e) => {
             try {
                 const data = JSON.parse(e.data || '{}');
+                if (!data || (!data.transcript && !data.error)) {
+                    console.log(`[SSE:${svc}] empty result`, data);
+                }
+                if (data && data.error) {
+                    console.log(`[SSE:${svc}] error`, data.error);
+                }
                 const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
                 if (!currentRecording) return;
                 const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);

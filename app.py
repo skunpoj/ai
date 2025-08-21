@@ -170,8 +170,30 @@ def render_full_row_route(record: str = '') -> Any:
     try:
         services = [s for s in registry_list() if s.get("enabled")]
         header = Tr(*[Th(s["label"]) for s in services])
-        row = Tr(*[Td(((rec.get("fullAppend", {}) or {}).get(s["key"], ""))) for s in services], id=f"fullrow-{rec.get('id','')}")
-        table = Table(THead(header), TBody(row), border="1", cellpadding="4", cellspacing="0", style="border-collapse:collapse; width:100%")
+        # Build first column with download icon + size when available and make clickable
+        first_cell_bits = []
+        try:
+            if rec.get("serverUrl"):
+                human = ""
+                size = int(rec.get("serverSizeBytes") or 0)
+                if size >= 1048576:
+                    human = f"({round(size/1048576,1)} MB)"
+                elif size >= 1024:
+                    human = f"({int(round(size/1024))} KB)"
+                elif size > 0:
+                    human = f"({size} B)"
+                first_cell_bits = [A("📥", href=rec.get("serverUrl"), download=True, title="Download", **{"data-load-full": rec.get("serverUrl")}, style="cursor:pointer;text-decoration:none"), Small(" "), Small(human, **{"data-load-full": rec.get("serverUrl")}, style="cursor:pointer")]
+        except Exception:
+            first_cell_bits = []
+        cells = []
+        for s in services:
+            val = ((rec.get("fullAppend", {}) or {}).get(s["key"], ""))
+            if not cells and first_cell_bits:
+                cells.append(Td(*first_cell_bits, data_svc=s["key"]))
+            else:
+                cells.append(Td(val, data_svc=s["key"]))
+        row = Tr(*cells, id=f"fullrow-{rec.get('id','')}")
+        table = Table(THead(header), TBody(row), border="0", cellpadding="0", cellspacing="0", style="border-collapse:collapse; border:0; width:100%")
         return HTMLResponse(str(table))
     except Exception:
         return HTMLResponse("<table></table>")
