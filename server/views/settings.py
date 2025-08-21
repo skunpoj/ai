@@ -21,7 +21,7 @@ def build_settings_modal() -> Any:
     second_row = Div(
         Input(type="radio", name="segmentLen", id="seg90", value="90000"), Label("90", _for="seg90"),
         Input(type="radio", name="segmentLen", id="seg120", value="120000"), Label("120", _for="seg120"),
-        Input(type="radio", name="segmentLen", id="seg150", value="150000"), Label("150", _for="seg150"),
+        # Input(type="radio", name="segmentLen", id="seg150", value="150000"), Label("150", _for="seg150"),
         Input(type="radio", name="segmentLen", id="seg180", value="180000"), Label("180", _for="seg180"),
         Input(type="radio", name="segmentLen", id="seg300", value="300000"), Label("300", _for="seg300"),
     )

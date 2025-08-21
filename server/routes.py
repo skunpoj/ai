@@ -72,7 +72,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         return Td(txt)
 
     # Full record section (no 'Transcribing…' indicator)
-    full_header = Tr(*[Th(s["label"], style="border:0") for s in services])
+    full_header = Tr(*[Th(s["label"], style="border:0;padding:0") for s in services])
     # show size in first cell if serverUrl present (no explicit download link)
     first_cell_bits: List[Any] = []
     if record.get("serverUrl"):
@@ -103,7 +103,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         border="0",
         cellpadding="0",
         cellspacing="0",
-        style="border-collapse:collapse; border:0; width:100%",
+        style="border-collapse:collapse; border-spacing:0; border:0; width:100%",
         id=f"fulltable-{record.get('id','')}",
         hx_post="/render/full_row",
         hx_trigger="refresh-full from:body",
@@ -113,7 +113,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     )
 
     # Segments table
-    seg_header = Tr(Th("Segment", style="border:0"), Th("Start", style="border:0"), Th("End", style="border:0"), *[Th(s["label"], style="border:0") for s in services])
+    seg_header = Tr(Th("Segment", style="border:0;padding:0"), Th("Start", style="border:0;padding:0"), Th("End", style="border:0;padding:0"), *[Th(s["label"], style="border:0;padding:0") for s in services])
     seg_rows: List[Any] = []
     segments: List[Dict[str, Any]] = record.get("segments", []) or []
     transcripts: Dict[str, List[str]] = record.get("transcripts", {}) or {}
@@ -129,7 +129,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         border="0",
         cellpadding="0",
         cellspacing="0",
-        style="border-collapse:collapse; border:0; width:100%",
+        style="border-collapse:collapse; border-spacing:0; border:0; width:100%",
         id=f"segtable-{record.get('id','')}"
     )
 
