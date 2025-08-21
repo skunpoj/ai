@@ -79,42 +79,66 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     def _td(txt: str) -> Any:
         return Td(txt)
 
-    # Full record section (no 'Transcribing…' indicator)
-    full_header = Tr(*[Th(s["label"], style="border:0;padding:0") for s in services])
-    # show size in first cell if serverUrl present (no explicit download link)
-    first_cell_bits: List[Any] = []
-    if record.get("serverUrl"):
-        human = ""
+    # Build top meta table to ensure consistent left padding with segment rows
+    src_url = record.get("serverUrl") or record.get("audioUrl")
+    player_bits: List[Any] = []
+    if src_url:
         try:
-            size = int(record.get("serverSizeBytes") or 0)
-            if size >= 1048576:
-                human = f"({round(size/1048576,1)} MB)"
-            elif size >= 1024:
-                human = f"({int(round(size/1024))} KB)"
-            elif size > 0:
-                human = f"({size} B)"
+            mt = "audio/ogg" if (str(src_url).lower().endswith(".ogg") or "/ogg" in str(src_url).lower()) else "audio/webm"
         except Exception:
-            human = ""
+            mt = "audio/webm"
+        player_bits.append(Audio(Source(src=src_url, type=mt), controls=True))
         try:
-            first_cell_bits = [Small(human, **{"data-load-full": record.get("serverUrl")}, style="cursor:pointer")]
+            if record.get("serverUrl"):
+                player_bits.append(Space(" "))
+                player_bits.append(A("📥", href=record.get("serverUrl"), download=True, title="Download", **{"data-load-full": record.get("serverUrl")}, style="cursor:pointer;text-decoration:none"))
         except Exception:
-            first_cell_bits = [Small(human)]
-    full_cells = []
-    for s in services:
-        val = ((record.get("fullAppend", {}) or {}).get(s["key"], ""))
-        # prepend size label only in first service column
-        if not full_cells and first_cell_bits:
-            full_cells.append(Td(*first_cell_bits, data_svc=s["key"]))
-        else:
-            full_cells.append(Td(val, data_svc=s["key"]))
-    full_row = Tr(*full_cells, id=f"fullrow-{record.get('id','')}")
-    full_table = Table(
-        THead(full_header),
-        TBody(full_row),
+            pass
+    size_val = 0
+    try:
+        size_val = int(record.get("serverSizeBytes") or record.get("clientSizeBytes") or 0)
+    except Exception:
+        size_val = 0
+    if size_val > 0:
+        try:
+            human = f"({int(size_val/1024)} KB)" if size_val >= 1024 else f"({size_val} B)"
+            url = record.get("serverUrl") or src_url or ""
+            player_bits.append(Space())
+            player_bits.append(Small(human, **{"data-load-full": url}, style="cursor:pointer"))
+        except Exception:
+            pass
+    dur_ms = record.get("durationMs") or 0
+    dur_s = int(dur_ms/1000) if isinstance(dur_ms, int) else 0
+    hdr = Div(
+        (f"Start: {_fmt_time(record.get('startTs'))} · End: {_fmt_time(record.get('stopTs'))} · Duration: {dur_s}s" if record.get("startTs") and record.get("stopTs") else ""),
+        style="margin-bottom:8px"
+    )
+    player_div = Div(*player_bits, style="margin-bottom:8px", id=f"recordmeta-{record.get('id','')}")
+    meta_table = Table(
+        TBody(
+            Tr(Td(H3("Full Record", style="margin:0;padding:0"), style="padding:0")),
+            Tr(Td(hdr, style="padding:0")),
+            Tr(Td(player_div, style="padding:0")),
+        ),
         border="0",
         cellpadding="0",
         cellspacing="0",
         style="border-collapse:collapse; border-spacing:0; border:0; width:100%",
+    )
+
+    # Provider table (one column per enabled service); live text filled via WS
+    full_header = Tr(*[Th(s["label"], style="border:0;padding:0") for s in services])
+    full_cells: List[Any] = [Td(((record.get("fullAppend", {}) or {}).get(s["key"], "")), data_svc=s["key"]) for s in services]
+    provider_table = Table(
+        THead(full_header),
+        TBody(Tr(*full_cells, id=f"fullrow-{record.get('id','')}") ),
+        border="0",
+        cellpadding="0",
+        cellspacing="0",
+        style="border-collapse:collapse; border-spacing:0; border:0; width:100%",
+    )
+    full_table = Div(
+        provider_table,
         id=f"fulltable-{record.get('id','')}",
         hx_post="/render/full_row",
         hx_trigger="refresh-full",
@@ -144,77 +168,12 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         id=f"segtable-{record.get('id','')}"
     )
 
-    # Header info
-    started = record.get("startTs")
-    ended = record.get("stopTs")
-    dur_ms = record.get("durationMs") or 0
-    dur_s = int(dur_ms/1000) if isinstance(dur_ms, int) else 0
-    hdr = Div(
-        (f"Start: {_fmt_time(started)} · End: {_fmt_time(ended)} · Duration: {dur_s}s" if started and ended else ""),
-        style="margin-bottom:8px"
-    )
-    # Player only (download available via browser control UI); keep size label
-    player_bits: List[Any] = []
-    # Prefer serverUrl so the playback points at a resolvable file immediately when available
-    src_url = record.get("serverUrl") or record.get("audioUrl")
-    if src_url:
-        try:
-            mt = "audio/ogg" if (str(src_url).lower().endswith(".ogg") or "/ogg" in str(src_url).lower()) else "audio/webm"
-        except Exception:
-            mt = "audio/webm"
-        player_bits.append(Audio(Source(src=src_url, type=mt), controls=True))
-        try:
-            # Provide an optional button to force-load the entire file so browser download appears immediately
-            if record.get("serverUrl"):
-                player_bits.append(Space(" "))
-                player_bits.append(Button("Load Full", id=f"loadFull-{record.get('id','')}", **{"data-load-full": record.get("serverUrl")}))
-                # Add a download icon next to the player with same behavior
-                player_bits.append(Space(" "))
-                try:
-                    player_bits.append(A("📥", href=record.get("serverUrl"), download=True, title="Download", **{"data-load-full": record.get("serverUrl")}, style="cursor:pointer;text-decoration:none"))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    # no explicit download link
-    size_bytes = 0
-    if isinstance(record.get("serverSizeBytes"), int) and record["serverSizeBytes"] > 0:
-        size_bytes = record["serverSizeBytes"]
-    elif isinstance(record.get("clientSizeBytes"), int) and record["clientSizeBytes"] > 0:
-        size_bytes = record["clientSizeBytes"]
-    if size_bytes > 0:
-        kb = int(size_bytes/1024)
-        try:
-            url = record.get("serverUrl") or ""
-            # Make size clickable to force-load entire file into an in-memory blob
-            player_bits.append(Space())
-            player_bits.append(Small(f"({kb} KB)", id=f"size-{record.get('id','')}", **{"data-load-full": url}, style="cursor:pointer"))
-        except Exception:
-            player_bits.append(Space(f" ({kb} KB)"))
-    # Ensure the meta container has a predictable id for live updates
-    player_div = Div(*player_bits, style="margin-bottom:8px", id=f"recordmeta-{record.get('id','')}")
-
     panel = Div(
-        Div(
-            Table(
-                TBody(
-                    Tr(Td(H3("Full Record", style="margin:0;padding:0"), style="padding:0")),
-                    Tr(Td(player_div, style="padding:0")),
-                    Tr(Td(hdr, style="padding:0")),
-                ),
-                border="0",
-                cellpadding="0",
-                cellspacing="0",
-                style="border-collapse:collapse; border-spacing:0; border:0; width:100%"
-            ),
-            full_table
-            ),
+        meta_table,
+        full_table,
         Div(
             H3("Segments"),
             seg_table,
-            # SSE hooks for htmx to trigger fragment refreshes
-            Div(hx_sse="connect:/events event:segment_saved", hx_trigger="sse:segment_saved"),
-            Div(hx_sse="connect:/events event:saved", hx_trigger="sse:saved"),
             style="margin-top:12px")
     )
     return str(panel)

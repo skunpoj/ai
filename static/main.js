@@ -68,6 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let recMimeType = '';
     let segmentTimerId = null;
     const transcribeTimeouts = new Map(); // key: `${recId}:${idx}:${svc}` -> timeoutId
+    const pendingCellUpdates = new Map(); // key: `${recId}:${idx}:${svc}` -> latest transcript
     
     // Add a connection status and test button UI elements if not present
     let connStatus = document.getElementById('connStatus');
@@ -436,18 +437,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     const handleSegmentSaved = async (data) => {
                         try {
-                            if (!currentRecording) return;
+                            const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || null);
+                            if (!rec) return;
                             const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                            while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
+                            while (rec.segments.length <= segIndex) rec.segments.push(null);
                             const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
                             const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
-                            currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
+                            rec.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
                             // Use shared helper to create the row immediately so playback appears in-session
-                            try { await prependSegmentRow(currentRecording, segIndex, data, startMs, endMs); } catch(e) { console.log('Frontend: prependSegmentRow failed', e); }
+                            try { await prependSegmentRow(rec, segIndex, data, startMs, endMs); } catch(e) { console.log('Frontend: prependSegmentRow failed', e); }
                             // Re-create a fresh countdown row for the next segment window
-                            try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
+                            try { showPendingCountdown(rec.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
                             // Ensure timeout is scheduled for the row's cells
-                            try { await scheduleSegmentTimeouts(currentRecording.id, segIndex); } catch(e) { console.log('Frontend: scheduleSegmentTimeouts failed', e); }
+                            try { await scheduleSegmentTimeouts(rec.id, segIndex); } catch(e) { console.log('Frontend: scheduleSegmentTimeouts failed', e); }
+                            // Flush any pending transcript updates queued before the row existed
+                            try {
+                                const services = ['google','vertex','gemini','aws'];
+                                for (const svc of services) {
+                                    const key = `${rec.id}:${segIndex}:${svc}`;
+                                    if (pendingCellUpdates.has(key)) {
+                                        const txt = pendingCellUpdates.get(key);
+                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                        if (row) {
+                                            const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                            if (td) td.textContent = txt;
+                                        }
+                                        pendingCellUpdates.delete(key);
+                                    }
+                                }
+                            } catch(_) {}
                         } catch(_) {}
                     };
                     const handleSaved = (data) => {
@@ -456,8 +474,67 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (rec) {
                                 if (data.url) rec.serverUrl = data.url;
                                 if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
-                                const fullEl = document.getElementById(`fulltable-${rec.id}`);
-                                if (fullEl) htmx.trigger(fullEl, 'refresh-full', { detail: { record: JSON.stringify(rec) } });
+                                // Inline update meta: audio src, download icon, size label
+                                const meta = document.getElementById(`recordmeta-${rec.id}`);
+                                if (meta && rec.serverUrl) {
+                                    try {
+                                        // Ensure audio points to server URL
+                                        let audio = meta.querySelector('audio');
+                                        if (audio) {
+                                            let srcEl = audio.querySelector('source');
+                                            if (!srcEl) { srcEl = document.createElement('source'); audio.appendChild(srcEl); }
+                                            srcEl.src = rec.serverUrl; srcEl.type = (rec.serverUrl.toLowerCase().includes('.ogg') ? 'audio/ogg' : 'audio/webm');
+                                            try { audio.load(); } catch(_) {}
+                                        }
+                                        // Ensure download link exists
+                                        let dl = meta.querySelector('a[data-load-full]');
+                                        if (!dl) {
+                                            dl = document.createElement('a');
+                                            dl.textContent = '📥'; dl.title = 'Download'; dl.style.cursor = 'pointer'; dl.style.textDecoration = 'none';
+                                            meta.appendChild(document.createTextNode(' '));
+                                            meta.appendChild(dl);
+                                        }
+                                        dl.setAttribute('href', rec.serverUrl);
+                                        dl.setAttribute('download', '');
+                                        dl.setAttribute('data-load-full', rec.serverUrl);
+                                        // Ensure size label exists
+                                        const sizeBytes = (typeof rec.serverSizeBytes === 'number' && rec.serverSizeBytes > 0) ? rec.serverSizeBytes : (rec.clientSizeBytes || 0);
+                                        if (sizeBytes) {
+                                            const kb = Math.max(1, Math.round(sizeBytes/1024));
+                                            let sm = meta.querySelector('small[data-load-full]');
+                                            if (!sm) { sm = document.createElement('small'); meta.appendChild(document.createTextNode(' ')); meta.appendChild(sm); }
+                                            sm.textContent = `(${kb} KB)`;
+                                            sm.setAttribute('data-load-full', rec.serverUrl);
+                                            sm.style.cursor = 'pointer';
+                                        }
+                                    } catch(_) {}
+                                }
+                                // Recompute fullAppend from transcripts to fill any missed segments
+                                try {
+                                    const services = ['google','vertex','gemini','aws'];
+                                    services.forEach(svc => {
+                                        const arr = (rec.transcripts && rec.transcripts[svc]) ? rec.transcripts[svc] : [];
+                                        const joined = Array.isArray(arr) ? arr.filter(Boolean).join(' ') : '';
+                                        rec.fullAppend = rec.fullAppend || {};
+                                        if (joined) rec.fullAppend[svc] = joined;
+                                        const fullCell = document.querySelector(`#fulltable-${rec.id} td[data-svc="${svc}"]`);
+                                        if (fullCell && joined) {
+                                            const hasDownloadChild = !!fullCell.querySelector('[data-load-full]');
+                                            if (hasDownloadChild) {
+                                                let span = fullCell.querySelector('span.full-text');
+                                                if (!span) { span = document.createElement('span'); span.className = 'full-text'; fullCell.appendChild(document.createTextNode(' ')); fullCell.appendChild(span); }
+                                                span.textContent = joined;
+                                            } else {
+                                                fullCell.textContent = joined;
+                                            }
+                                        }
+                                    });
+                                } catch(_) {}
+                            }
+                            // If user requested stop, close WS shortly after save confirmation
+                            if (pendingStop && socket && socket.readyState === WebSocket.OPEN) {
+                                if (savedCloseTimer) { try { clearTimeout(savedCloseTimer); } catch(_) {} }
+                                savedCloseTimer = setTimeout(() => { try { socket.close(); } catch(_) {} }, 300);
                             }
                         } catch(_) {}
                     };
@@ -465,33 +542,58 @@ document.addEventListener('DOMContentLoaded', () => {
                         try {
                             if (!msg.transcript && !msg.error) console.log(`[WS:${msg.type}] empty result`, msg);
                             if (msg.error) console.log(`[WS:${msg.type}] error`, msg.error);
-                            if (!currentRecording) return;
+                            const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || null);
+                            if (!rec) return;
                             const segIndex = (typeof msg.idx === 'number') ? msg.idx : -1;
                             if (segIndex < 0) { console.log(`[WS:${msg.type}] missing idx, skip`, msg); return; }
                             try {
-                                const svc = (msg.type || '').replace('segment_transcript_', '') || '';
+                                let svc = (msg.type || '').replace('segment_transcript_', '') || '';
+                                if (!svc) svc = msg.svc || msg.provider || msg.service || '';
                                 if (svc) {
-                                    const arr = (currentRecording.transcripts[svc] = currentRecording.transcripts[svc] || []);
+                                    const arr = (rec.transcripts[svc] = rec.transcripts[svc] || []);
                                     while (arr.length <= segIndex) arr.push('');
                                     if (typeof msg.transcript === 'string') arr[segIndex] = msg.transcript;
-                                    clearSvcTimeout(currentRecording.id, segIndex, svc);
-                                    // Also append to full-record running text and refresh the full row immediately
+                                    clearSvcTimeout(rec.id, segIndex, svc);
+                                    // Append once per svc:segment and update full provider cell in-place
                                     if (typeof msg.transcript === 'string' && msg.transcript.trim()) {
-                                        currentRecording.fullAppend = currentRecording.fullAppend || {};
-                                        const prev = currentRecording.fullAppend[svc] || '';
-                                        currentRecording.fullAppend[svc] = prev ? (prev + ' ' + msg.transcript.trim()) : msg.transcript.trim();
-                                        const fullEl = document.getElementById(`fulltable-${currentRecording.id}`);
-                                        if (fullEl) {
-                                            try { htmx.ajax('POST', '/render/full_row', { target: fullEl, values: { record: JSON.stringify(currentRecording) }, swap: 'innerHTML' }); } catch(_) {}
+                                        rec._appended = rec._appended || {};
+                                        const key = `${svc}:${segIndex}`;
+                                        if (!rec._appended[key]) {
+                                            rec.fullAppend = rec.fullAppend || {};
+                                            const prev = rec.fullAppend[svc] || '';
+                                            rec.fullAppend[svc] = prev ? (prev + ' ' + msg.transcript.trim()) : msg.transcript.trim();
+                                            rec._appended[key] = true;
+                                        }
+                                        const fullCell = document.querySelector(`#fulltable-${rec.id} td[data-svc="${svc}"]`);
+                                        if (fullCell) {
+                                            const hasDownloadChild = !!fullCell.querySelector('[data-load-full]');
+                                            if (hasDownloadChild) {
+                                                let span = fullCell.querySelector('span.full-text');
+                                                if (!span) {
+                                                    span = document.createElement('span');
+                                                    span.className = 'full-text';
+                                                    if (fullCell.childNodes && fullCell.childNodes.length > 0) fullCell.appendChild(document.createTextNode(' '));
+                                                    fullCell.appendChild(span);
+                                                }
+                                                span.textContent = rec.fullAppend[svc] || msg.transcript;
+                                            } else {
+                                                fullCell.textContent = rec.fullAppend[svc] || msg.transcript;
+                                            }
+                                        }
+                                    }
+                                    // Direct DOM update for segment cell
+                                    const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                    if (row) {
+                                        const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                        if (td && typeof msg.transcript === 'string') td.textContent = msg.transcript;
+                                    } else {
+                                        // Queue pending update until the row is created
+                                        if (typeof msg.transcript === 'string') {
+                                            pendingCellUpdates.set(`${rec.id}:${segIndex}:${svc}`, msg.transcript);
                                         }
                                     }
                                 }
-                            } catch(_) {}
-                            const row = document.getElementById(`segrow-${currentRecording.id}-${segIndex}`);
-                            if (row) {
-                                try { row.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex })); } catch(_) {}
-                                try { htmx.ajax('POST', '/render/segment_row', { target: row, values: { record: JSON.stringify(currentRecording), idx: segIndex }, swap: 'outerHTML' }); } catch(_) {}
-                            }
+                            } catch(e) { console.log('Frontend: handleTranscript update failed', e); }
                         } catch(_) {}
                     };
                     socket.addEventListener('message', (ev) => {
@@ -511,7 +613,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 socket.addEventListener('open', onSocketReady, { once: true });
             }
 
-            // WebSocket message handler is now moved to SSE/HTMX for UI updates; we keep WS for audio.
+            // WebSocket handlers drive live UI updates; SSE may be used only for saved/segment_saved.
 
             socket.onclose = () => {
                 console.log('Frontend: Direct WebSocket closed.');
@@ -864,56 +966,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Wire SSE (Server-Sent Events) to trigger HTMX fragment refreshes
     try {
-        const es = new EventSource('/events');
-        es.addEventListener('segment_saved', async (e) => {
-            try {
-                const data = JSON.parse(e.data || '{}');
-                if (!currentRecording) return;
-                const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
-                while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
-                const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
-                const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
-                currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
-                const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
-                const rowId = `segrow-${currentRecording.id}-${segIndex}`;
-                let row = document.getElementById(rowId);
-                if (!row && tbody) {
-                    row = document.createElement('tr');
-                    row.id = rowId;
-                    row.setAttribute('hx-post', '/render/segment_row');
-                    row.setAttribute('hx-trigger', 'refresh-row');
-                    row.setAttribute('hx-target', 'this');
-                    row.setAttribute('hx-swap', 'outerHTML');
-                    row.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
-                    // minimal placeholder cells so the row is visible before swap
-                    row.innerHTML = '<td></td><td></td><td></td>';
-                    // remove pending countdown row if present, then insert new row at top
-                    const pending = document.getElementById(`segpending-${currentRecording.id}`);
-                    if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
-                    tbody.insertBefore(row, tbody.firstChild);
-                }
-                // Trigger HTMX refresh on this row
-                const target = document.getElementById(rowId);
-                if (target) htmx.trigger(target, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
-            } catch(_) {}
-        });
-        es.addEventListener('saved', (e) => {
-            try {
-                const data = JSON.parse(e.data || '{}');
-                const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || recordings[recordings.length - 1]);
-                if (rec) {
-                    if (data.url) rec.serverUrl = data.url;
-                    if (typeof data.size === 'number') rec.serverSizeBytes = data.size;
-                    const fullEl = document.getElementById(`fulltable-${rec.id}`);
-                    if (fullEl) htmx.trigger(fullEl, 'refresh-full', { detail: { record: JSON.stringify(rec) } });
-                }
-                // If user requested stop, close WS shortly after save confirmation
-                if (pendingStop && socket && socket.readyState === WebSocket.OPEN) {
-                    if (savedCloseTimer) { try { clearTimeout(savedCloseTimer); } catch(_) {} }
-                    savedCloseTimer = setTimeout(() => { try { socket.close(); } catch(_) {} }, 300);
-                }
-            } catch(_) {}
-        });
+        // Disable SSE wiring; WS handles live updates and saved events
+        // const es = new EventSource('/events');
+        // es.addEventListener('segment_saved', ...);
+        // es.addEventListener('saved', ...);
         // transcripts events simply trigger row refresh if row exists
         const txHandler = (svc) => (e) => {
             try {
@@ -955,10 +1011,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } catch(_) {}
         };
-        es.addEventListener('segment_transcript_google', txHandler('google'));
-        es.addEventListener('segment_transcript_vertex', txHandler('vertex'));
-        es.addEventListener('segment_transcript_gemini', txHandler('gemini'));
-        es.addEventListener('segment_transcript_aws', txHandler('aws'));
+        // Disable SSE transcript events; live updates handled via WebSocket only
+        // es.addEventListener('segment_transcript_google', txHandler('google'));
+        // es.addEventListener('segment_transcript_vertex', txHandler('vertex'));
+        // es.addEventListener('segment_transcript_gemini', txHandler('gemini'));
+        // es.addEventListener('segment_transcript_aws', txHandler('aws'));
     } catch(_) {}
 
     // Test Transcribe wiring (Settings UI)
