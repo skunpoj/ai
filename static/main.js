@@ -405,6 +405,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); } catch (e) { console.warn('Frontend: start on open failed:', e); }
                 startSegmentLoop();
+                // Ensure first pending row is created and subsequent cycles keep a visible countdown row
+                try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
                 // Attach WS message handler for UI updates as a fallback when SSE isn't available
                 try {
                     const handleSegmentSaved = async (data) => {
@@ -417,6 +419,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
                             // Use shared helper to create the row immediately so playback appears in-session
                             try { await prependSegmentRow(currentRecording, segIndex, data, startMs, endMs); } catch(_) {}
+                            // Re-create a fresh countdown row for the next segment window
+                            try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
                             // Ensure timeout is scheduled for the row's cells
                             try { await scheduleSegmentTimeouts(currentRecording.id, segIndex); } catch(_) {}
                         } catch(_) {}

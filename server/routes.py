@@ -234,7 +234,11 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
         seg_cell_children.append(Audio(Source(src=seg["url"], type=seg.get("mime") or "audio/webm"), controls=True))
         if isinstance(seg.get("size"), int):
             kb = int(seg["size"]/1024)
-            seg_cell_children.append(Space(f" ({kb} KB)"))
+            try:
+                seg_cell_children.append(Space())
+                seg_cell_children.append(Small(f"({kb} KB)", id=f"segsize-{record.get('id','')}-{idx}", data_load_full=seg.get("url") or "", style="cursor:pointer"))
+            except Exception:
+                seg_cell_children.append(Space(f" ({kb} KB)"))
     seg_cell = Td(*seg_cell_children)
     start_cell = Td(("" if not seg else ("" if not seg.get("startMs") else str(_fmt_time(seg["startMs"])))))
     end_cell = Td(("" if not seg else ("" if not seg.get("endMs") else str(_fmt_time(seg["endMs"])))))

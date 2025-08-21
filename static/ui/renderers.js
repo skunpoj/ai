@@ -43,8 +43,9 @@ export async function renderRecordingPanel(record) {
   for (const i of presentIdx) {
     const seg = record.segments[i];
     const segMime = (seg && seg.url && seg.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
+    const sizeLabel = seg && seg.size ? bytesToLabel(seg.size) : '';
     const leftCells = `
-      <td>${seg && seg.url ? `<audio controls><source src="${seg.url}" type="${segMime}"></audio>` : ''} ${seg && seg.size ? `(${bytesToLabel(seg.size)})` : ''}</td>
+      <td>${seg && seg.url ? `<audio controls><source src="${seg.url}" type="${segMime}"></audio>` : ''} ${sizeLabel ? `<small id="segsize-${record.id}-${i}" data-load-full="${seg && seg.url ? seg.url : ''}" style="cursor:pointer">(${sizeLabel})</small>` : ''}</td>
       <td>${seg && seg.startMs ? formatElapsed(seg.startMs - (record.startTs || seg.startMs)) : ''}</td>
       <td>${seg && seg.endMs ? formatElapsed(seg.endMs - (record.startTs || seg.endMs)) : ''}</td>
     `;

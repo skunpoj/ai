@@ -53,7 +53,8 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   const audioCell = document.createElement('td');
   const sizeLabel = data.size ? `(${(data.size/1024).toFixed(0)} KB)` : '';
   const mime = (data.url && data.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
-  audioCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeLabel}`;
+  const sizeHtml = sizeLabel ? `<small id="segsize-${record.id}-${segIndex}" data-load-full="${data.url || ''}" style="cursor:pointer">${sizeLabel}</small>` : '';
+  audioCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
   const startCell = document.createElement('td');
   startCell.textContent = formatElapsed(startMs - (record.startTs || startMs));
   const endCell = document.createElement('td');
