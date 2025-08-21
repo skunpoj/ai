@@ -23,7 +23,16 @@ from server.routes import build_index, render_panel, render_segment_row, render_
 from server.ws import ws_handler
 from server.services.registry import list_services as registry_list, set_service_enabled
 from server.sse_bus import stream as sse_stream
-from server.routes import _b64_to_bytes
+# inline helper for base64 decode (avoid import cycle)
+def _b64_to_bytes(data_url_or_b64: str) -> bytes:
+    import base64
+    try:
+        s = data_url_or_b64
+        if s.startswith("data:") and "," in s:
+            s = s.split(",",1)[1]
+        return base64.b64decode(s)
+    except Exception:
+        return b""
 from typing import Any, List, Dict
 from starlette.responses import JSONResponse, HTMLResponse
 import json

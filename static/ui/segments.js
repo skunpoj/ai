@@ -52,7 +52,7 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   tr.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(record), idx: segIndex }));
   const audioCell = document.createElement('td');
   const sizeLabel = data.size ? `(${(data.size/1024).toFixed(0)} KB)` : '';
-  audioCell.innerHTML = `${data.url ? `<audio controls src="${data.url}"></audio> <a href="${data.url}" download title="Download">📥</a>` : ''} ${sizeLabel}`;
+  audioCell.innerHTML = `${data.url ? `<audio controls src="${data.url}"></audio>` : ''} ${sizeLabel}`;
   const startCell = document.createElement('td');
   startCell.textContent = formatElapsed(startMs - (record.startTs || startMs));
   const endCell = document.createElement('td');

@@ -6,6 +6,7 @@ Settings modal UI components for the FastHTML app.
 Separating this keeps routing thin and UI composition modular.
 """
 from fasthtml.common import *
+from server.state import app_state
 
 
 def build_settings_modal() -> Any:
@@ -54,27 +55,33 @@ def build_settings_modal() -> Any:
                 style="margin-bottom:8px"
             ),
             Div(
-                Input(type="text", id="geminiApiKey", placeholder="Enter Gemini API Key", style="width:100%"),
+                Input(
+                    type="text",
+                    id="geminiApiKey",
+                    placeholder=(app_state.gemini_api_key_masked or "Enter Gemini API Key"),
+                    style="width:100%"
+                ),
                 Button("Apply", id="useGeminiKey"),
                 style="margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:8px"
             ),
             Hr(),
             H3("Transcribe Test"),
             Div(
-                Audio(controls=True, id="testAudio"),
-                style="margin-bottom:8px"
-            ),
-            Div(
+                Audio(controls=True, id="testAudio", style="width:100%"),
                 Input(type="file", id="testUpload", accept="audio/*"),
-                Button("Record 2s", id="testRecord2s", style="margin-left:8px"),
-                Button("Transcribe Test", id="testRun", style="margin-left:8px"),
-                style="margin-bottom:8px"
+                Button("Record 2s", id="testRecord2s"),
+                Button("Transcribe Test", id="testRun"),
+                style="margin-bottom:8px;display:flex;gap:8px;align-items:center"
             ),
             Small("Results:", style="color:#aaa"),
-            Div(id="testResults", style="min-height:24px;margin-bottom:8px"),
+            Div(id="testResults", style="min-height:24px;max-height:180px;overflow:auto;margin-bottom:8px"),
             id="providerCheckboxes"
         ),
-        Div(Button("Check Connection", id="testConnection"), P("WebSocket: not connected", id="connStatus"))
+        Div(
+            Button("Check Connection", id="testConnection"),
+            P("WebSocket: not connected", id="connStatus", style="margin:0"),
+            style="display:flex;gap:8px;align-items:center"
+        )
     )
 
     content = Div(
@@ -83,7 +90,7 @@ def build_settings_modal() -> Any:
         provider_checks,
         Div(Button("OK", id="okSegmentModal"), style="text-align:center;margin-top:8px"),
         id="segmentModalContent",
-        style="background:#222;padding:16px;border:1px solid #444;max-width:520px;margin:10% auto",
+        style="background:#222;padding:16px;border:1px solid #444;max-width:820px;margin:10% auto",
     )
     modal = Div(
         content,
