@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 from fasthtml.common import *
+from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect # Explicitly import WebSocket classes from starlette
 
 # Transcription is now controlled at runtime via Start/Stop Transcribe
@@ -50,6 +51,11 @@ app, rt = fast_app(exts='ws', hdrs=_HDRS) # WS for audio; SSE for UI updates
 # Serve static from an absolute path to avoid CWD-related 404s
 _STATIC_DIR = os.path.join(_ROOT, "static")
 app.static_route_exts(prefix="/static", static_path=_STATIC_DIR) # Configure static files serving
+# Fallback generic static mount to ensure uncommon extensions (e.g., .ogg) are served
+try:
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+except Exception:
+    pass
 
 print(f"Current working directory: {os.getcwd()}")
 print(f"Absolute path to static directory: {_STATIC_DIR}")

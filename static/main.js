@@ -407,7 +407,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 startSegmentLoop();
                 // Attach WS message handler for UI updates as a fallback when SSE isn't available
                 try {
-                    const handleSegmentSaved = (data) => {
+                    const handleSegmentSaved = async (data) => {
                         try {
                             if (!currentRecording) return;
                             const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
@@ -415,24 +415,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
                             const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
                             currentRecording.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
-                            const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
-                            const rowId = `segrow-${currentRecording.id}-${segIndex}`;
-                            let row = document.getElementById(rowId);
-                            if (!row && tbody) {
-                                row = document.createElement('tr');
-                                row.id = rowId;
-                                row.setAttribute('hx-post', '/render/segment_row');
-                                row.setAttribute('hx-trigger', 'refresh-row');
-                                row.setAttribute('hx-target', 'this');
-                                row.setAttribute('hx-swap', 'outerHTML');
-                                row.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(currentRecording), idx: segIndex }));
-                                row.innerHTML = '<td></td><td></td><td></td>';
-                                const pending = document.getElementById(`segpending-${currentRecording.id}`);
-                                if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
-                                tbody.insertBefore(row, tbody.firstChild);
-                            }
-                            const target = document.getElementById(rowId);
-                            if (target) htmx.trigger(target, 'refresh-row', { detail: { record: JSON.stringify(currentRecording), idx: segIndex } });
+                            // Use shared helper to create the row immediately so playback appears in-session
+                            try { await prependSegmentRow(currentRecording, segIndex, data, startMs, endMs); } catch(_) {}
+                            // Ensure timeout is scheduled for the row's cells
+                            try { await scheduleSegmentTimeouts(currentRecording.id, segIndex); } catch(_) {}
                         } catch(_) {}
                     };
                     const handleSaved = (data) => {

@@ -100,10 +100,10 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     full_table = Table(
         THead(full_header),
         TBody(full_row),
-        border="1",
+        border="0",
         cellpadding="4",
         cellspacing="0",
-        style="border-collapse:collapse; width:100%",
+        style="border-collapse:collapse; border:0; width:100%",
         id=f"fulltable-{record.get('id','')}",
         hx_post="/render/full_row",
         hx_trigger="refresh-full from:body",
@@ -126,10 +126,10 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     seg_table = Table(
         THead(seg_header),
         TBody(*seg_rows, id=f"segtbody-{record.get('id','')}") ,
-        border="1",
+        border="0",
         cellpadding="4",
         cellspacing="0",
-        style="border-collapse:collapse; width:100%",
+        style="border-collapse:collapse; border:0; width:100%",
         id=f"segtable-{record.get('id','')}"
     )
 
@@ -167,7 +167,13 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         size_bytes = record["clientSizeBytes"]
     if size_bytes > 0:
         kb = int(size_bytes/1024)
-        player_bits.append(Space(f" ({kb} KB)"))
+        try:
+            url = record.get("serverUrl") or ""
+            # Make size clickable to force-load entire file into an in-memory blob
+            player_bits.append(Space())
+            player_bits.append(Small(f"({kb} KB)", id=f"size-{record.get('id','')}", data_load_full=url, style="cursor:pointer"))
+        except Exception:
+            player_bits.append(Space(f" ({kb} KB)"))
     # Ensure the meta container has a predictable id for live updates
     player_div = Div(*player_bits, style="margin-bottom:8px", id=f"recordmeta-{record.get('id','')}")
 
@@ -319,7 +325,7 @@ def render_full_row(req) -> Any:
             else:
                 full_cells.append(Td(val, data_svc=s["key"]))
         full_row = Tr(*full_cells, id=f"fullrow-{record.get('id','')}")
-        table = Table(THead(full_header), TBody(full_row), border="1", cellpadding="4", cellspacing="0", style="border-collapse:collapse; width:100%")
+        table = Table(THead(full_header), TBody(full_row), border="0", cellpadding="4", cellspacing="0", style="border-collapse:collapse; border:0; width:100%")
         html = str(table)
     except Exception:
         html = "<table></table>"
