@@ -100,6 +100,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const transcribeTimeouts = new Map(); // key: `${recId}:${idx}:${svc}` -> timeoutId
     const pendingCellUpdates = new Map(); // key: `${recId}:${idx}:${svc}` -> latest transcript
     const pendingCellUpdatesByClientId = new Map(); // key: `${recId}:${clientId}:${svc}`
+    const segmentIdToIndex = new Map(); // key: `${recId}:${serverId}` -> idx
+    const pendingCellUpdatesByServerId = new Map(); // key: `${recId}:${serverId}:${svc}`
+    function getServerId(obj) { try { return obj && (obj.segment_id || obj.sid || obj.server_id || null); } catch(_) { return null; } }
+    function findSegmentRowEl(recId, segIndex, clientId, serverId) {
+        try {
+            if (typeof segIndex === 'number' && segIndex >= 0) {
+                const byIdx = document.getElementById(`segrow-${recId}-${segIndex}`);
+                if (byIdx) return byIdx;
+            }
+            const root = document.getElementById(`segtbody-${recId}`) || document;
+            if (typeof clientId === 'number') {
+                const byClient = root.querySelector(`tr[data-client-id="${clientId}"]`);
+                if (byClient) return byClient;
+            }
+            if (serverId) {
+                const byServer = root.querySelector(`tr[data-server-id="${serverId}"]`);
+                if (byServer) return byServer;
+            }
+        } catch(_) {}
+        return null;
+    }
     let audioCtxInstance = null; // Shared AudioContext to fully release audio resources on stop
     let testActiveStream = null; // Tracks settings-modal test recorder stream
     
@@ -566,6 +587,21 @@ document.addEventListener('DOMContentLoaded', () => {
                             try {
                                 const tempUrl = URL.createObjectURL(segBlob);
                                 insertTempSegmentRow(currentRecording, ts, tempUrl, segBlob.size, currentRecording.segments[segIndex].startMs, currentRecording.segments[segIndex].endMs);
+                                // Flush any queued transcript updates by clientId into the temp row immediately
+                                try {
+                                    const prefix = `${currentRecording.id}:${ts}:`;
+                                    for (const [k, txt] of pendingCellUpdatesByClientId.entries()) {
+                                        if (!k.startsWith(prefix)) continue;
+                                        const parts = k.split(':');
+                                        const svc = parts[2] || '';
+                                        const tempRow = document.getElementById(`segtemp-${currentRecording.id}-${ts}`);
+                                        if (tempRow) {
+                                            const td = tempRow.querySelector(`td[data-svc="${svc}"]`);
+                                            if (td && typeof txt === 'string') td.textContent = txt;
+                                            pendingCellUpdatesByClientId.delete(k);
+                                        }
+                                    }
+                                } catch(_) {}
                             } catch(_) {}
                             // Upload to backend via WebSocket with client id and idx for server mapping
                             try {
@@ -594,18 +630,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         ? new AudioWorkletNode(audioCtxInstance, 'pcm16-worklet', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 })
                         : null;
                     if (workletNode) {
-                        workletNode.port.onmessage = ev => {
-                            if (!enableGoogleSpeech || !socket || socket.readyState !== WebSocket.OPEN) return;
-                            const bytes = new Uint8Array(ev.data);
-                            let bin = '';
-                            const chunk = 0x8000;
-                            for (let i = 0; i < bytes.length; i += chunk) {
-                                bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-                            }
-                            const b64 = btoa(bin);
-                            try { socket.send(JSON.stringify({ pcm16: b64 })); } catch (_) {}
-                        };
-                        source.connect(workletNode);
+                workletNode.port.onmessage = ev => {
+                if (!enableGoogleSpeech || !socket || socket.readyState !== WebSocket.OPEN) return;
+                    const bytes = new Uint8Array(ev.data);
+                let bin = '';
+                const chunk = 0x8000;
+                for (let i = 0; i < bytes.length; i += chunk) {
+                    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                }
+                const b64 = btoa(bin);
+                try { socket.send(JSON.stringify({ pcm16: b64 })); } catch (_) {}
+            };
+                source.connect(workletNode);
                         workletNode.connect(audioCtxInstance.destination);
                     } else {
                         console.warn('Frontend: AudioWorkletNode not available; skipping PCM16 live capture.');
@@ -673,9 +709,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         stopRecordingButton.disabled = true;
                         return;
                     }
-                    startSegmentLoop();
-                    // Ensure first pending row is created and subsequent cycles keep a visible countdown row
-                    try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
+                startSegmentLoop();
+                // Ensure first pending row is created and subsequent cycles keep a visible countdown row
+                try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
                 }
                 // Attach WS message handler for UI updates as a fallback when SSE isn't available
                 try {
@@ -683,15 +719,68 @@ document.addEventListener('DOMContentLoaded', () => {
                         try {
                             const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || null);
                             if (!rec) return;
-                            const segIndex = (typeof data.idx === 'number') ? data.idx : data.id;
+                            let segIndex = (typeof data.idx === 'number') ? data.idx : -1;
+                            if (segIndex < 0 && typeof data.id === 'number') {
+                                try {
+                                    const found = rec.segments.find(s => s && s.clientId === data.id);
+                                    if (found && typeof found.idx === 'number') segIndex = found.idx;
+                                } catch(_) {}
+                            }
+                            const serverId = getServerId(data);
+                            if (segIndex < 0) segIndex = rec.segments.length;
                             while (rec.segments.length <= segIndex) rec.segments.push(null);
-                            const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
-                            const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
-                            rec.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
+                            const seeded = rec.segments[segIndex] || {};
+                            const seededStart = (seeded && typeof seeded.startMs === 'number') ? seeded.startMs : ((typeof data.ts === 'number') ? data.ts : Date.now());
+                            const seededEnd = (seeded && typeof seeded.endMs === 'number') ? seeded.endMs : (seededStart + (typeof segmentMs === 'number' ? segmentMs : 10000));
+                            rec.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs: seededStart, endMs: seededEnd, clientId: data.id, serverId };
+                            // Map serverId -> idx for future transcript routing
+                            if (serverId) {
+                                try { segmentIdToIndex.set(`${rec.id}:${serverId}`, segIndex); } catch(_) {}
+                            }
                             // Remove any temp row for this client timestamp
                             try { const temp = document.getElementById(`segtemp-${rec.id}-${data.id}`); if (temp && temp.parentElement) temp.parentElement.removeChild(temp); } catch(_) {}
                             // Use shared helper to create the row immediately so playback appears in-session
-                            try { await prependSegmentRow(rec, segIndex, data, startMs, endMs); } catch(e) { console.log('Frontend: prependSegmentRow failed', e); }
+                            try { await prependSegmentRow(rec, segIndex, data, seededStart, seededEnd); } catch(e) { console.log('Frontend: prependSegmentRow failed', e); }
+                            // Annotate row with identifiers to help future lookups
+                            try {
+                                const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                if (row) {
+                                    if (typeof data.id === 'number') row.setAttribute('data-client-id', String(data.id));
+                                    if (serverId) row.setAttribute('data-server-id', String(serverId));
+                                }
+                            } catch(_) {}
+                            // If a temp row still exists for this client id, merge queued clientId transcripts into the new row
+                            try {
+                                const prefix = `${rec.id}:${data.id}:`;
+                                for (const [k, txt] of pendingCellUpdatesByClientId.entries()) {
+                                    if (!k.startsWith(prefix)) continue;
+                                    const parts = k.split(':');
+                                    const svc = parts[2] || '';
+                                    const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                    if (row) {
+                                        const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                        if (td && typeof txt === 'string') td.textContent = txt;
+                                        pendingCellUpdatesByClientId.delete(k);
+                                    }
+                                }
+                            } catch(_) {}
+                            // Flush any transcripts queued by serverId
+                            try {
+                                if (serverId) {
+                                    const prefix2 = `${rec.id}:${serverId}:`;
+                                    for (const [k, txt] of pendingCellUpdatesByServerId.entries()) {
+                                        if (!k.startsWith(prefix2)) continue;
+                                        const parts = k.split(':');
+                                        const svc = parts[2] || '';
+                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                        if (row) {
+                                            const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                            if (td && typeof txt === 'string') td.textContent = txt;
+                                            pendingCellUpdatesByServerId.delete(k);
+                                        }
+                                    }
+                                }
+                            } catch(_) {}
                             // No countdown row in compat mode
                             // Ensure timeout is scheduled for the row's cells
                             try { await scheduleSegmentTimeouts(rec.id, segIndex); } catch(e) { console.log('Frontend: scheduleSegmentTimeouts failed', e); }
@@ -800,7 +889,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (msg.error) console.log(`[WS:${msg.type}] error`, msg.error);
                             const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || null);
                             if (!rec) return;
+                            const serverId = getServerId(msg);
                             let segIndex = (typeof msg.idx === 'number') ? msg.idx : -1;
+                            if (segIndex < 0 && serverId) {
+                                try {
+                                    const mapped = segmentIdToIndex.get(`${rec.id}:${serverId}`);
+                                    if (typeof mapped === 'number') segIndex = mapped;
+                                } catch(_) {}
+                            }
                             if (segIndex < 0 && typeof msg.id === 'number') {
                                 // Fallback to client timestamp id mapping
                                 try {
@@ -815,9 +911,11 @@ document.addEventListener('DOMContentLoaded', () => {
                                 if (svc) {
                                     const arr = (rec.transcripts[svc] = rec.transcripts[svc] || []);
                                     if (segIndex >= 0) {
-                                        while (arr.length <= segIndex) arr.push('');
-                                        if (typeof msg.transcript === 'string') arr[segIndex] = msg.transcript;
-                                        clearSvcTimeout(rec.id, segIndex, svc);
+                                    while (arr.length <= segIndex) arr.push('');
+                                    if (typeof msg.transcript === 'string') arr[segIndex] = msg.transcript;
+                                    clearSvcTimeout(rec.id, segIndex, svc);
+                                    // Persist serverId on resolved segment for future lookups
+                                    try { if (serverId) { while (rec.segments.length <= segIndex) rec.segments.push(null); rec.segments[segIndex] = Object.assign({}, rec.segments[segIndex] || {}, { serverId, idx: segIndex }); segmentIdToIndex.set(`${rec.id}:${serverId}`, segIndex); } } catch(_) {}
                                     }
                                     // Append once per svc:segment and update full provider cell in-place
                                     if (typeof msg.transcript === 'string' && msg.transcript.trim()) {
@@ -842,25 +940,84 @@ document.addEventListener('DOMContentLoaded', () => {
                                     // Direct DOM update for segment cell (no HTMX swap)
                                     try {
                                         if (segIndex >= 0) {
-                                            const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
-                                            if (row) {
-                                                const td = row.querySelector(`td[data-svc="${svc}"]`);
-                                                if (td && typeof msg.transcript === 'string') td.textContent = msg.transcript;
-                                            } else if (typeof msg.transcript === 'string') {
-                                                pendingCellUpdates.set(`${rec.id}:${segIndex}:${svc}`, msg.transcript);
+                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                        if (row) {
+                                            const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                            if (td && typeof msg.transcript === 'string') td.textContent = msg.transcript;
+                                        } else if (typeof msg.transcript === 'string') {
+                                            pendingCellUpdates.set(`${rec.id}:${segIndex}:${svc}`, msg.transcript);
                                             }
-                                        } else if (typeof msg.transcript === 'string' && typeof msg.id === 'number') {
-                                            pendingCellUpdatesByClientId.set(`${rec.id}:${msg.id}:${svc}`, msg.transcript);
+                                        } else if (typeof msg.transcript === 'string') {
+                                            if (typeof msg.id === 'number') pendingCellUpdatesByClientId.set(`${rec.id}:${msg.id}:${svc}`, msg.transcript);
+                                            if (serverId) pendingCellUpdatesByServerId.set(`${rec.id}:${serverId}:${svc}`, msg.transcript);
                                         }
                                     } catch(_) {}
                                 }
                             } catch(e) { console.log('Frontend: handleTranscript update failed', e); }
                         } catch(_) {}
                     };
+                    const handleSegmentAck = (msg) => {
+                        try {
+                            const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || null);
+                            if (!rec) return;
+                            const serverId = getServerId(msg);
+                            let segIndex = (typeof msg.idx === 'number') ? msg.idx : -1;
+                            if (segIndex < 0 && typeof msg.id === 'number') {
+                                try { const found = rec.segments.find(s => s && s.clientId === msg.id); if (found) segIndex = found.idx; } catch(_) {}
+                            }
+                            if (segIndex < 0 && serverId) {
+                                try { const mapped = segmentIdToIndex.get(`${rec.id}:${serverId}`); if (typeof mapped === 'number') segIndex = mapped; } catch(_) {}
+                            }
+                            if (segIndex < 0) segIndex = rec.segments.length;
+                            while (rec.segments.length <= segIndex) rec.segments.push(null);
+                            const seeded = rec.segments[segIndex] || {};
+                            rec.segments[segIndex] = Object.assign({}, seeded, { idx: segIndex, clientId: (typeof msg.id === 'number' ? msg.id : seeded.clientId), serverId });
+                            if (serverId) segmentIdToIndex.set(`${rec.id}:${serverId}`, segIndex);
+                            // Update any existing row (temp or real) with serverId attribute
+                            try {
+                                const row = document.getElementById(`segrow-${rec.id}-${segIndex}`) || document.getElementById(`segtemp-${rec.id}-${msg.id}`);
+                                if (row && serverId) row.setAttribute('data-server-id', String(serverId));
+                            } catch(_) {}
+                            // Flush queued transcripts by clientId/serverId now that idx is known
+                            try {
+                                const services = ['google','vertex','gemini','aws'];
+                                for (const svc of services) {
+                                    const k1 = `${rec.id}:${segIndex}:${svc}`;
+                                    if (pendingCellUpdates.has(k1)) {
+                                        const txt = pendingCellUpdates.get(k1);
+                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                        if (row) { const td = row.querySelector(`td[data-svc="${svc}"]`); if (td) td.textContent = txt; }
+                                        pendingCellUpdates.delete(k1);
+                                    }
+                                    if (typeof msg.id === 'number') {
+                                        const k2 = `${rec.id}:${msg.id}:${svc}`;
+                                        if (pendingCellUpdatesByClientId.has(k2)) {
+                                            const txt2 = pendingCellUpdatesByClientId.get(k2);
+                                            const row2 = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                            if (row2) { const td2 = row2.querySelector(`td[data-svc="${svc}"]`); if (td2) td2.textContent = txt2; }
+                                            pendingCellUpdatesByClientId.delete(k2);
+                                        }
+                                    }
+                                    if (serverId) {
+                                        const k3 = `${rec.id}:${serverId}:${svc}`;
+                                        if (pendingCellUpdatesByServerId.has(k3)) {
+                                            const txt3 = pendingCellUpdatesByServerId.get(k3);
+                                            const row3 = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                            if (row3) { const td3 = row3.querySelector(`td[data-svc="${svc}"]`); if (td3) td3.textContent = txt3; }
+                                            pendingCellUpdatesByServerId.delete(k3);
+                                        }
+                                    }
+                                }
+                            } catch(_) {}
+                            // Ensure timeouts for this row
+                            try { scheduleSegmentTimeouts(rec.id, segIndex); } catch(_) {}
+                        } catch(_) {}
+                    };
                     socket.addEventListener('message', (ev) => {
                         try {
                             const msg = JSON.parse(ev.data);
                             if (!msg || !msg.type) return;
+                            if (msg.type === 'segment_ack') return handleSegmentAck(msg);
                             if (msg.type === 'segment_saved') return handleSegmentSaved(msg);
                             if (msg.type === 'saved') return handleSaved(msg);
                             if (msg.type.startsWith('segment_transcript')) return handleTranscript(msg);
