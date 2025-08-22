@@ -76,6 +76,7 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   if (document.getElementById(rowId)) return document.getElementById(rowId);
   const tr = document.createElement('tr');
   tr.id = rowId;
+  try { tr.setAttribute('data-start-ms', String(startMs)); } catch(_) {}
   tr.setAttribute('hx-post', '/render/segment_row');
   tr.setAttribute('hx-trigger', 'refresh-row');
   tr.setAttribute('hx-target', 'this');
@@ -106,13 +107,27 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
       tr.appendChild(td);
     });
   } catch(_) {}
-  // Keep countdown row (segpending-<id>) at the very top; insert new row right after it if present
-  const pendingTop = document.getElementById(`segpending-${record.id}`);
-  if (pendingTop && pendingTop.parentElement === tbody) {
-    try { tbody.insertBefore(tr, pendingTop.nextSibling); } catch(_) { tbody.insertBefore(tr, tbody.firstChild); }
-  } else {
-    tbody.insertBefore(tr, tbody.firstChild);
-  }
+  // Insert sorted by startMs descending among existing segment rows (segrow-/segtemp-)
+  try {
+    const children = Array.from(tbody.children);
+    const pendingTop = document.getElementById(`segpending-${record.id}`);
+    const startVal = Number(startMs) || 0;
+    let inserted = false;
+    for (const child of children) {
+      if (!child || !(child.id || '').length) continue;
+      if (pendingTop && child === pendingTop) continue;
+      if (!/^seg(row|temp)-/.test(child.id)) continue;
+      const other = Number(child.getAttribute('data-start-ms') || '0');
+      if (other < startVal) { tbody.insertBefore(tr, child); inserted = true; break; }
+    }
+    if (!inserted) {
+      if (pendingTop && pendingTop.parentElement === tbody) {
+        try { tbody.insertBefore(tr, pendingTop.nextSibling); } catch(_) { tbody.appendChild(tr); }
+      } else {
+        tbody.appendChild(tr);
+      }
+    }
+  } catch(_) { tbody.insertBefore(tr, tbody.firstChild); }
   return tr;
 }
 
@@ -126,7 +141,9 @@ export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs
     tr.id = tempId;
     // Tag so caller can revoke object URL once server row replaces this temp row
     if (url) try { tr.setAttribute('data-temp-url', url); } catch(_) {}
+    try { tr.setAttribute('data-start-ms', String(startMs)); } catch(_) {}
     tr.setAttribute('data-client-ts', String(clientTs));
+    try { tr.setAttribute('data-client-id', String(clientTs)); } catch(_) {}
     const audioCell = document.createElement('td');
     audioCell.style.padding = '0';
     const kb = size ? `(${(size/1024).toFixed(0)} KB)` : '';
@@ -154,13 +171,27 @@ export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs
         });
       }).catch(() => {});
     } catch(_) {}
-    // Keep countdown row pinned to top; insert temp row right after it
-    const pendingTop = document.getElementById(`segpending-${record.id}`);
-    if (pendingTop && pendingTop.parentElement === tbody) {
-      try { tbody.insertBefore(tr, pendingTop.nextSibling); } catch(_) { tbody.insertBefore(tr, tbody.firstChild); }
-    } else {
-      tbody.insertBefore(tr, tbody.firstChild);
-    }
+    // Insert sorted by startMs descending among existing segment rows
+    try {
+      const children = Array.from(tbody.children);
+      const pendingTop = document.getElementById(`segpending-${record.id}`);
+      const startVal = Number(startMs) || 0;
+      let inserted = false;
+      for (const child of children) {
+        if (!child || !(child.id || '').length) continue;
+        if (pendingTop && child === pendingTop) continue;
+        if (!/^seg(row|temp)-/.test(child.id)) continue;
+        const other = Number(child.getAttribute('data-start-ms') || '0');
+        if (other < startVal) { tbody.insertBefore(tr, child); inserted = true; break; }
+      }
+      if (!inserted) {
+        if (pendingTop && pendingTop.parentElement === tbody) {
+          try { tbody.insertBefore(tr, pendingTop.nextSibling); } catch(_) { tbody.appendChild(tr); }
+        } else {
+          tbody.appendChild(tr);
+        }
+      }
+    } catch(_) { tbody.insertBefore(tr, tbody.firstChild); }
     return tr;
   } catch(_) { return null; }
 }
