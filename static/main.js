@@ -8,6 +8,7 @@ import { showPendingCountdown, prependSegmentRow, insertTempSegmentRow } from '/
 import { setButtonsOnStart, setButtonsOnStop } from '/static/ui/recording.js';
 import { acquireWakeLock, releaseWakeLock, initWakeLockVisibilityReacquire } from '/static/app/wake_lock.js';
 import { createSegmentLoop, arrayBufferToBase64 as ab2b64 } from '/static/app/segment_loop.js';
+import { safelyStopStream, createMediaRecorderWithFallback } from '/static/app/recorder_utils.js';
 
 // Main frontend controller: wires recording controls, websocket, segments loop,
 // tabbed UI, and dynamic provider columns.
@@ -41,6 +42,22 @@ document.addEventListener('DOMContentLoaded', () => {
     // - Reacquired on visibilitychange when returning to the page
     // Reacquire wake lock on visibility when recording
     initWakeLockVisibilityReacquire(() => (!!(mediaRecorder && mediaRecorder.state === 'recording') || !!segmentLoopActive));
+
+    // Lightweight diagnostics to verify runtime prerequisites; safe to remove later
+    function runDiagnostics(tag) {
+        try {
+            const issues = [];
+            if (typeof MediaRecorder === 'undefined') issues.push('MediaRecorder missing');
+            if (!('mediaDevices' in navigator) || !navigator.mediaDevices.getUserMedia) issues.push('getUserMedia missing');
+            if (typeof WebSocket === 'undefined') issues.push('WebSocket missing');
+            if (!document.getElementById('recordTabs')) issues.push('recordTabs missing');
+            if (!document.getElementById('recordPanels')) issues.push('recordPanels missing');
+            if (typeof showPendingCountdown !== 'function') issues.push('showPendingCountdown missing');
+            if (!document.getElementById('segmentModal')) issues.push('segmentModal missing');
+            if (issues.length) console.warn('Diagnostics:', tag || '', issues.join(' | '));
+            else console.log('Diagnostics OK', tag || '');
+        } catch(e) { console.warn('Diagnostics error', e); }
+    }
 
     const startRecordingButton = document.getElementById('startRecording');
     const stopRecordingButton = document.getElementById('stopRecording');
@@ -76,14 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Recorder helpers
     let currentStream = null;
     // Stop and release any active MediaStream tracks (microphone)
-    function stopCurrentStreamTracks() {
-        try {
-            if (currentStream && currentStream.getTracks) {
-                currentStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} });
-            }
-        } catch(_) {}
-        currentStream = null;
-    }
+    function stopCurrentStreamTracks() { try { safelyStopStream(currentStream); } catch(_) {} currentStream = null; }
     let recOptions = {};
     let recMimeType = '';
     let segmentTimerId = null;
@@ -168,33 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
         throw lastErr || new Error('Failed to acquire microphone');
     }
 
-    function safelyStopStream(stream) {
-        try {
-            if (stream && stream.getTracks) {
-                const tracks = stream.getTracks();
-                const anyLive = tracks.some(t => (t.readyState === 'live'));
-                if (!anyLive) return;
-                tracks.forEach(t => { try { t.stop(); } catch(_) {} });
-            }
-        } catch(_) {}
-    }
-
-    function createMediaRecorderWithFallback(stream) {
-        const types = [
-            'audio/webm;codecs=opus',
-            'audio/webm',
-            'audio/ogg;codecs=opus',
-            '' // default
-        ];
-        for (const t of types) {
-            try {
-                const opts = t ? { mimeType: t } : undefined;
-                const mr = new MediaRecorder(stream, opts);
-                return { mr, mime: t || (recMimeType || 'audio/webm') };
-            } catch(_) {}
-        }
-        throw new Error('MediaRecorder unsupported');
-    }
+    // moved to recorder_utils.js
     async function ensureSocketOpen() {
         try {
             if (!socket || (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING)) {
@@ -223,6 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (openSegmentModalBtn && segmentModal) openSegmentModalBtn.addEventListener('click', async () => {
         segmentModal.style.display = 'block';
+        runDiagnostics('openSegmentModal');
         await ensureSocketOpen();
         // Initialize provider checkboxes to reflect backend registry
         try {
@@ -472,6 +457,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (liveTranscriptContainer) liveTranscriptContainer.innerHTML = '';
 
         console.log("Frontend: Start Recording button clicked.");
+        runDiagnostics('startRecording');
         // Prevent mobile devices from auto-locking while recording
         try { await acquireWakeLock(); } catch(_) {}
 
@@ -542,9 +528,9 @@ document.addEventListener('DOMContentLoaded', () => {
             currentStream = stream;
             // Full recorder (continuous) collects fullChunks for final full recording
             try {
-                const { mr, mime } = createMediaRecorderWithFallback(currentStream);
-                mediaRecorder = mr;
-                if (!recMimeType) recMimeType = mime;
+                const ref = { value: recMimeType };
+                mediaRecorder = createMediaRecorderWithFallback(currentStream, ref);
+                if (!recMimeType) recMimeType = ref.value || recMimeType;
             } catch (e) {
                 console.error('Frontend: Failed to create MediaRecorder with fallbacks:', e);
                 alert(`Recording setup failed. Please try again.${e && (e.name || e.code) ? ` (${e.name || e.code})` : ''}`);
@@ -964,6 +950,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                             const mime = (audioUrl && audioUrl.toLowerCase().includes('.ogg')) ? 'audio/ogg' : (recMimeType || 'audio/webm');
                             // Match segment size label style: parentheses, clickable to force-load
+                            // Match segment size label format: integer KB in parentheses
                             const sizeBytes = (typeof currentRecording.serverSizeBytes === 'number' && currentRecording.serverSizeBytes > 0)
                                 ? currentRecording.serverSizeBytes : (audioBlob.size || 0);
                             const kb = sizeBytes ? Math.max(1, Math.round(sizeBytes/1024)) : 0;
