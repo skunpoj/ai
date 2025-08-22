@@ -74,6 +74,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const serviceAdminRoot = null; // removed separate admin; now in modal
     // Recorder helpers
     let currentStream = null;
+    // Stop and release any active MediaStream tracks (microphone)
+    function stopCurrentStreamTracks() {
+        try {
+            if (currentStream && currentStream.getTracks) {
+                currentStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} });
+            }
+        } catch(_) {}
+        currentStream = null;
+    }
     let recOptions = {};
     let recMimeType = '';
     let segmentTimerId = null;
@@ -434,6 +443,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // No separate placeholder row; countdown pending row is used instead
 
         try {
+            // Defensive: fully release any prior mic tracks before requesting a new one
+            stopCurrentStreamTracks();
             const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1, sampleRate: 48000 } });
             // Prefer WebM Opus for widest browser support; fallback to OGG Opus
             const preferredTypes = [
@@ -804,6 +815,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (_) {}
                 // Close socket as requested; will reopen on next Start Recording
                 try { if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) socket.close(); } catch(_) {}
+                // Final defensive cleanup of mic stream to avoid OS-level "in use" conflicts
+                stopCurrentStreamTracks();
                 if (currentRecording) renderRecordingPanel(currentRecording);
                 currentRecording = null; // Reset for next session (recordings array keeps history)
             };
