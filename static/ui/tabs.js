@@ -4,7 +4,8 @@ export function ensureTab(tabsBar, panelsHost, record) {
     if (existing) return;
     const tabBtn = document.createElement('button');
     tabBtn.id = `tab-${record.id}`;
-    tabBtn.textContent = new Date(record.startTs || Date.now()).toLocaleTimeString();
+    const startLbl = new Date(record.startTs || Date.now()).toLocaleTimeString();
+    tabBtn.textContent = startLbl; // Abbreviated label; updated on stop with end/duration
     tabBtn.addEventListener('click', () => activateTab(tabsBar, panelsHost, record.id));
     tabsBar.appendChild(tabBtn);
 

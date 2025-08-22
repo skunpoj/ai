@@ -637,17 +637,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                             }
                                         } catch(_) {}
                                     }
-                                    // Direct DOM update for segment cell
-                                    const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
-                                    if (row) {
-                                        const td = row.querySelector(`td[data-svc="${svc}"]`);
-                                        if (td && typeof msg.transcript === 'string') td.textContent = msg.transcript;
-                                    } else {
-                                        // Queue pending update until the row is created
-                                        if (typeof msg.transcript === 'string') {
+                                    // Direct DOM update for segment cell (no HTMX swap)
+                                    try {
+                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                        if (row) {
+                                            const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                            if (td && typeof msg.transcript === 'string') td.textContent = msg.transcript;
+                                        } else if (typeof msg.transcript === 'string') {
                                             pendingCellUpdates.set(`${rec.id}:${segIndex}:${svc}`, msg.transcript);
                                         }
-                                    }
+                                    } catch(_) {}
                                 }
                             } catch(e) { console.log('Frontend: handleTranscript update failed', e); }
                         } catch(_) {}
@@ -764,23 +763,45 @@ document.addEventListener('DOMContentLoaded', () => {
                     currentRecording.audioUrl = audioUrl;
                     currentRecording.clientSizeBytes = audioBlob.size;
                     console.log('Frontend: Updated current recording with audioUrl:', currentRecording);
-                    // Insert full player/icon/size into the first row of the segments table
+                    // Insert a full recording row at the very top of the segments table (created only on Stop)
                     try {
-                        const fullCell = document.getElementById(`fullcell-${currentRecording.id}`);
-                        if (fullCell) {
+                        const tbody = document.getElementById(`segtbody-${currentRecording.id}`);
+                        if (tbody) {
+                            let tr = document.getElementById(`fullrowline-${currentRecording.id}`);
+                            if (!tr) {
+                                tr = document.createElement('tr');
+                                tr.id = `fullrowline-${currentRecording.id}`;
+                                const td = document.createElement('td');
+                                // Determine total column count from thead
+                                let colCount = 2; // Segment + Time (minimum)
+                                try {
+                                    const segTable = document.getElementById(`segtable-${currentRecording.id}`);
+                                    if (segTable) colCount = Math.max(1, segTable.querySelectorAll('thead th').length);
+                                } catch(_) {}
+                                td.setAttribute('colspan', String(colCount));
+                                tr.appendChild(td);
+                                tbody.insertBefore(tr, tbody.firstChild);
+                            }
                             const mime = (audioUrl && audioUrl.toLowerCase().includes('.ogg')) ? 'audio/ogg' : (recMimeType || 'audio/webm');
                             const kb = Math.max(1, Math.round((audioBlob.size || 0)/1024));
                             const sizeHtml = kb ? ` <small>(${kb} KB)</small>` : '';
                             const playerHtml = `<audio controls><source src="${audioUrl}" type="${mime}"></audio>`;
                             const dlHtml = `<a href="${audioUrl}" download title="Download" style="cursor:pointer;text-decoration:none">📥</a>`;
-                            fullCell.innerHTML = `${playerHtml} ${dlHtml}${sizeHtml}`;
+                            tr.firstChild.innerHTML = `${playerHtml} ${dlHtml}${sizeHtml}`;
                         }
+                        // Update tab button with compact start->end (duration)
+                        try {
+                            const tabBtn = document.getElementById(`tab-${currentRecording.id}`);
+                            if (tabBtn) {
+                                const s = new Date(currentRecording.startTs).toLocaleTimeString();
+                                const e = new Date(currentRecording.stopTs).toLocaleTimeString();
+                                const d = Math.max(0, Math.round((currentRecording.durationMs || 0)/1000));
+                                tabBtn.textContent = `${s}→${e} (${d}s)`;
+                            }
+                        } catch(_) {}
                         const hdr = document.getElementById(`recordhdr-${currentRecording.id}`);
                         if (hdr) {
-                            const startStr = new Date(currentRecording.startTs).toLocaleTimeString();
-                            const endStr = new Date(currentRecording.stopTs).toLocaleTimeString();
-                            const durS = Math.max(0, Math.round((currentRecording.durationMs || 0)/1000));
-                            hdr.textContent = `Start: ${startStr} · End: ${endStr} · Duration: ${durS}s`;
+                            hdr.textContent = ''; // clear header info; tab now carries the timing
                         }
                     } catch(_) {}
                 }
@@ -927,10 +948,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!panelEl) return;
         // Use client renderer for initial structure to avoid 400 during early recording
         try { await renderPanel(record); } catch (_) {}
-        // After panel render, trigger initial provider table refresh only (segment rows stay client-owned to avoid flicker)
+        // Trigger a provider table refresh via HTMX once panel is mounted in DOM
         setTimeout(() => {
-            const fullEl = document.getElementById(`fulltable-${record.id}`);
-            if (fullEl) htmx.ajax('POST', '/render/full_row', { target: fullEl, values: { record: JSON.stringify(record) }, swap: 'innerHTML' });
+            try {
+                const fullEl = document.getElementById(`fulltable-${record.id}`);
+                if (fullEl && typeof htmx !== 'undefined') {
+                    htmx.trigger(fullEl, 'refresh-full');
+                }
+            } catch(_) {}
         }, 0);
     }
 

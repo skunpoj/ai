@@ -36,14 +36,13 @@ export async function renderRecordingPanel(record) {
   const services = (await getServices()).filter(s => !!s.enabled);
 
   let segRowsHtml = '';
-  // Full row placeholder at top: first cell label, second time cell, then provider fullAppend cells
-  const fullCells = services.map(svc => `<td data-svc="${svc.key}">${record.fullAppend[svc.key] || ''}</td>`).join('');
-  segRowsHtml += `<tr id="fullrowline-${record.id}"><td id="fullcell-${record.id}" style="white-space:nowrap">Full</td><td data-col="time"></td>${fullCells}</tr>`;
+  // No Full row during recording; full player is inserted into the top row only on Stop
   const presentIdx = [];
-  for (let i = 0; i < record.segments.length; i++) if (record.segments[i]) presentIdx.push(i);
+  const segs = Array.isArray(record.segments) ? record.segments : [];
+  for (let i = 0; i < segs.length; i++) if (segs[i]) presentIdx.push(i);
   presentIdx.sort((a, b) => b - a);
   for (const i of presentIdx) {
-    const seg = record.segments[i];
+    const seg = segs[i];
     const segMime = (seg && seg.url && seg.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
     const sl = seg && seg.size ? bytesToLabel(seg.size) : '';
     const segUrl = seg && seg.url ? seg.url : '';
@@ -55,7 +54,8 @@ export async function renderRecordingPanel(record) {
       <td data-col="time">${timeStr}</td>
     `;
     const svcCells = services.map(svc => {
-      const val = (record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : '';
+      const tx = (record.transcripts && record.transcripts[svc.key]) || [];
+      const val = (typeof tx[i] !== 'undefined') ? (tx[i] || '') : '';
       let display = val ? val : '';
       const timeouts = (record.timeouts && record.timeouts[svc.key]) || [];
       if (!val && i < timeouts.length && timeouts[i]) display = 'no result (timeout)';
@@ -66,20 +66,11 @@ export async function renderRecordingPanel(record) {
   }
 
   const fullHxVals = JSON.stringify({ record: JSON.stringify(record) }).replace(/"/g, '&quot;');
+  const fullCells = services.map(svc => `<td data-svc="${svc.key}">${(record.fullAppend && record.fullAppend[svc.key]) || ''}</td>`).join('');
 
   panel.innerHTML = `
     <div>
-      <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
-        <tbody>
-          <tr>
-            <td style="padding:0"></td>
-            <td style="padding:0"></td>
-            <td style="padding:0"></td>
-            <td style="padding:0"><div id="recordhdr-${record.id}" style="margin-bottom:8px">${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}</div></td>
-          </tr>
-        </tbody>
-      </table>
-      <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
+      <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="load, refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
         <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
           <thead>
             <tr>
