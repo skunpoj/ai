@@ -44,17 +44,17 @@ hr { display:none; }
         """), \
         Div(
             Div(
-                Button("Start Recording", id="startRecording"),
-                Button("Stop Recording", id="stopRecording", disabled=True),
+                Button("Start Record", id="startRecording"),
+                Button("Stop Record", id="stopRecording", disabled=True),
                 Button("Settings", id="openSegmentModal"),
             # ),
             # Div(
                 Input(type="checkbox", id="autoTranscribeToggle", checked=True),
                 Label("Auto Transcribe", _for="autoTranscribeToggle"),
                 Input(type="checkbox", id="toggleSegMetaToolbar", checked=True),
-                Label("file size", _for="toggleSegMetaToolbar"),
+                Label("Download", _for="toggleSegMetaToolbar"),
                 Input(type="checkbox", id="toggleTimeColToolbar", checked=True),
-                Label("Time elapsed", _for="toggleTimeColToolbar"),
+                Label("Time Range", _for="toggleTimeColToolbar"),
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
             ),

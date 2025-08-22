@@ -36,12 +36,18 @@ export function createSegmentLoop(getStream, getRecOptions, getSegmentMs, onSegm
       if (!isLoopActive()) return;
       const ts = Date.now();
       let segmentRecorder;
-      try { segmentRecorder = new MediaRecorder(getStream(), getRecOptions()); } catch (e) { console.warn('Frontend: segmentRecorder create failed:', e); setLoopActive(false); return; }
+      let loopStream = null;
+      try {
+        const baseStream = (typeof getStream === 'function') ? getStream() : null;
+        if (!baseStream) { console.warn('Frontend: segmentLoop missing base stream, stopping.'); setLoopActive(false); return; }
+        loopStream = (baseStream && typeof baseStream.clone === 'function') ? baseStream.clone() : baseStream;
+        segmentRecorder = new MediaRecorder(loopStream, getRecOptions());
+      } catch (e) { console.warn('Frontend: segmentRecorder create failed:', e); setLoopActive(false); try { if (loopStream && loopStream.getTracks) loopStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {} return; }
       let segBlob = null;
       segmentRecorder.ondataavailable = (e) => { if (e.data && e.data.size) segBlob = e.data; };
       segmentRecorder.onstop = async () => {
         // Start next segment immediately to avoid gaps
-        if (isLoopActive()) setTimeout(loopOnce, 0);
+        if (isLoopActive()) setTimeout(loopOnce, 10);
         // Upload previous blob after next has started
         if (segBlob && segBlob.size) {
           const rec = getCurrentRecording();
@@ -53,8 +59,10 @@ export function createSegmentLoop(getStream, getRecOptions, getSegmentMs, onSegm
             if (socket && socket.readyState === WebSocket.OPEN) await uploadSegment(ts, segBlob);
           } catch(_) {}
         }
+        // Always stop cloned stream tracks to release mic resources
+        try { if (loopStream && loopStream.getTracks) loopStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
       };
-      try { segmentRecorder.start(); } catch (e) { console.warn('Frontend: segmentRecorder start failed:', e); setLoopActive(false); return; }
+      try { segmentRecorder.start(); } catch (e) { console.warn('Frontend: segmentRecorder start failed:', e); setLoopActive(false); try { if (loopStream && loopStream.getTracks) loopStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {} return; }
       if (typeof onSegmentStart === 'function') onSegmentStart(segmentRecorder);
       setTimeout(() => { try { if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch (_) {} }, getSegmentMs());
     };
