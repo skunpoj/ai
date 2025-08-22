@@ -69,7 +69,8 @@ def build_settings_modal() -> Any:
                     placeholder=(app_state.gemini_api_key_masked or "Enter Gemini API Key"),
                     style="width:100%"
                 ),
-                Button("Apply", id="useGeminiKey"),
+                # Make Apply smaller/shorter
+                Button("Apply", id="useGeminiKey", style="padding:4px 10px;font-size:12px"),
                 style="margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:8px"
             ),
             Hr(),
@@ -77,8 +78,8 @@ def build_settings_modal() -> Any:
             Div(Audio(controls=True, id="testAudio", style="width:100%")),
             Div(
                 Input(type="file", id="testUpload", accept="audio/*"),
-                Button("Record 2s", id="testRecord2s"),
-                Button("Transcribe Test", id="testRun"),
+                Button("Record 2s", id="testRecord2s", style="padding:4px 10px;font-size:12px"),
+                Button("Transcribe Test", id="testRun", style="padding:4px 10px;font-size:12px"),
                 style="margin-bottom:8px;display:flex;gap:8px;align-items:center"
             ),
             Small("Results:", style="color:#aaa"),
@@ -86,7 +87,7 @@ def build_settings_modal() -> Any:
             id="providerCheckboxes"
         ),
         Div(
-            Button("Check Connection", id="testConnection"),
+            Button("Check Connection", id="testConnection", style="padding:4px 10px;font-size:12px"),
             P("WebSocket: not connected", id="connStatus", style="margin:0"),
             style="display:flex;gap:8px;align-items:center"
         )
@@ -95,7 +96,8 @@ def build_settings_modal() -> Any:
     content = Div(
         len_group,
         provider_checks,
-        Div(Button("OK", id="okSegmentModal"), style="text-align:center;margin-top:8px"),
+        # Keep OK larger than other buttons
+        Div(Button("OK", id="okSegmentModal", style="padding:10px 14px;font-size:14px"), style="text-align:center;margin-top:8px"),
         id="segmentModalContent",
         style="background:#222;padding:16px;border:1px solid #444;max-width:960px;width:96vw;max-height:90vh;margin:5vh auto;overflow:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box",
     )

@@ -1,3 +1,18 @@
+### Recording architecture
+
+- Default: single-recorder (timeslice) mode. One `MediaRecorder` captures continuously; each chunk (timeslice) is treated as a segment and uploaded, ensuring gapless capture. Flag `USE_COMPAT_SINGLE_RECORDER` in `static/main.js` controls this behavior.
+- Optional: dual-recorder loop (feature-flagged). A per-segment recorder runs in a loop to produce clean containers while a full recorder runs continuously. This is behind a flag due to potential mic contention on some browsers/devices.
+
+### UI tables
+
+- `fulltable-<id>`: provider-wide concatenated transcripts for the session. Kept for quick at-a-glance review; can be pruned if redundant.
+- `recordmeta-<id>`: full recording row (player + size) injected on stop; segment rows (`segrow-<id>-<idx>`) are created as segments arrive.
+
+### Stability notes
+
+- Avoid multiple concurrent `MediaRecorder`s bound to the same `MediaStream` to reduce resource contention.
+- Countdown row is pinned to the top and updated with RAF; segment rows are inserted below to prevent flicker.
+
 Live Transcription & Segmented Recording
 
 This app records audio continuously while creating short, sequential segment files for robust server-side STT.

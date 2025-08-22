@@ -31,7 +31,7 @@ export async function renderRecordingPanel(record) {
   const mime = srcUrl.toLowerCase().endsWith('.ogg') ? 'audio/ogg' : 'audio/webm';
   const sizeHtml = sizeLabel ? `<small id="size-${record.id}" data-load-full="${srcUrl}" style="cursor:pointer">(${sizeLabel})</small>` : '';
   const downloadIcon = srcUrl ? `<a href="${srcUrl}" download title="Download" data-load-full="${srcUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : '';
-  const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${downloadIcon} ${sizeHtml}`;
+  const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${srcUrl ? `${downloadIcon} ${sizeHtml}` : ''}`;
 
   const services = (await getServices()).filter(s => !!s.enabled);
 
@@ -43,7 +43,7 @@ export async function renderRecordingPanel(record) {
       const url = record.serverUrl || record.audioUrl;
       const bytes = (typeof record.serverSizeBytes === 'number' && record.serverSizeBytes > 0) ? record.serverSizeBytes : (record.clientSizeBytes || 0);
       const kb = bytes ? Math.max(1, Math.round(bytes/1024)) : 0;
-      const sizeHtml = kb ? ` <small>(${kb} KB)</small>` : '';
+      const sizeHtml = kb ? ` <small data-load-full="${url}" style="cursor:pointer">(${kb} KB)</small>` : '';
       const playerHtml = `<audio controls><source src="${url}" type="${mime}"></audio>`;
       const dlHtml = `<a href="${url}" download title="Download" data-load-full="${url}" style="cursor:pointer;text-decoration:none">📥</a>`;
       // span all columns (Segment + Time + providers)

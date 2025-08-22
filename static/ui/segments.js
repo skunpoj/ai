@@ -89,6 +89,7 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   audioCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
   const timeCell = document.createElement('td');
   timeCell.style.padding = '0';
+  try { timeCell.style.whiteSpace = 'nowrap'; } catch(_) {}
   timeCell.setAttribute('data-col', 'time');
   const startStr = formatElapsed(startMs - (record.startTs || startMs));
   const endStr = formatElapsed(endMs - (record.startTs || endMs));
@@ -132,15 +133,27 @@ export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs
     const mime = (url && url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
     const sizeHtml = kb ? `<small style="cursor:default">${kb}</small>` : '';
     audioCell.innerHTML = `${url ? `<audio controls><source src="${url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
-    const startCell = document.createElement('td');
-    startCell.style.padding = '0';
-    startCell.textContent = formatElapsed(startMs - (record.startTs || startMs));
-    const endCell = document.createElement('td');
-    endCell.style.padding = '0';
-    endCell.textContent = formatElapsed(endMs - (record.startTs || endMs));
+    const timeCell = document.createElement('td');
+    timeCell.style.padding = '0';
+    try { timeCell.style.whiteSpace = 'nowrap'; } catch(_) {}
+    timeCell.setAttribute('data-col', 'time');
+    const startStr = formatElapsed(startMs - (record.startTs || startMs));
+    const endStr = formatElapsed(endMs - (record.startTs || endMs));
+    timeCell.textContent = `${startStr} – ${endStr}`;
     tr.appendChild(audioCell);
-    tr.appendChild(startCell);
-    tr.appendChild(endCell);
+    tr.appendChild(timeCell);
+    // Append placeholder provider cells to keep columns aligned
+    try {
+      getServicesCached().then(services => {
+        services.filter(s => s.enabled).forEach(s => {
+          const td = document.createElement('td');
+          td.style.padding = '0';
+          td.setAttribute('data-svc', s.key);
+          td.textContent = 'transcribing…';
+          tr.appendChild(td);
+        });
+      }).catch(() => {});
+    } catch(_) {}
     // Keep countdown row pinned to top; insert temp row right after it
     const pendingTop = document.getElementById(`segpending-${record.id}`);
     if (pendingTop && pendingTop.parentElement === tbody) {
