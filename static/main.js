@@ -710,6 +710,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     let segBlob = null;
                     segmentRecorder.ondataavailable = (e) => { if (e.data && e.data.size) segBlob = e.data; };
                     segmentRecorder.onstop = async () => {
+                        // Start next segment immediately to avoid gaps, then upload previous blob
+                        if (segmentLoopActive) setTimeout(loopOnce, 0);
                         if (segBlob && segBlob.size) {
                             console.log('Frontend: Segment available:', segBlob.size, 'bytes');
                             // Insert a temp row immediately with client blob URL to avoid UI gap
@@ -717,7 +719,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 const tempUrl = URL.createObjectURL(segBlob);
                                 insertTempSegmentRow(currentRecording, ts, tempUrl, segBlob.size, ts, ts + (typeof segmentMs === 'number' ? segmentMs : 10000));
                             } catch(_) {}
-                            // UI for segments handled in renderRecordingPanel upon server echo
+                            // Upload in background after next segment has started
                             try {
                                 if (socket.readyState === WebSocket.OPEN) {
                                     const arrayBuffer = await segBlob.arrayBuffer();
@@ -726,7 +728,6 @@ document.addEventListener('DOMContentLoaded', () => {
                                 }
                             } catch (_) {}
                         }
-                        if (segmentLoopActive) setTimeout(loopOnce, 0);
                     };
                     try { segmentRecorder.start(); } catch (e) { console.warn('Frontend: segmentRecorder start failed:', e); segmentLoopActive = false; return; }
                     // Live countdown for this segment in a pending top row within the segments table
@@ -783,11 +784,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                 tbody.insertBefore(tr, tbody.firstChild);
                             }
                             const mime = (audioUrl && audioUrl.toLowerCase().includes('.ogg')) ? 'audio/ogg' : (recMimeType || 'audio/webm');
-                            const kb = Math.max(1, Math.round((audioBlob.size || 0)/1024));
-                            const sizeHtml = kb ? ` <small>(${kb} KB)</small>` : '';
+                            // Match segment size label style: parentheses, clickable to force-load
+                            const sizeBytes = (typeof currentRecording.serverSizeBytes === 'number' && currentRecording.serverSizeBytes > 0)
+                                ? currentRecording.serverSizeBytes : (audioBlob.size || 0);
+                            const kb = sizeBytes ? Math.max(1, Math.round(sizeBytes/1024)) : 0;
+                            const sizeHtml = kb ? ` <small data-load-full="${audioUrl}" style="cursor:pointer">(${kb} KB)</small>` : '';
                             const playerHtml = `<audio controls><source src="${audioUrl}" type="${mime}"></audio>`;
                             const dlHtml = `<a href="${audioUrl}" download title="Download" style="cursor:pointer;text-decoration:none">📥</a>`;
                             tr.firstChild.innerHTML = `${playerHtml} ${dlHtml}${sizeHtml}`;
+                            // Remove any existing countdown row now that recording stopped
+                            try { const pending = document.getElementById(`segpending-${currentRecording.id}`); if (pending && pending.parentElement) pending.parentElement.removeChild(pending); } catch(_) {}
                         }
                         // Update tab button with compact start->end (duration)
                         try {

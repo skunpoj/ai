@@ -1,3 +1,38 @@
+Live Transcription & Segmented Recording
+
+This app records audio continuously while creating short, sequential segment files for robust server-side STT.
+
+Quick Start
+- Start the server.
+- Open the app, click Start Recording, and allow microphone access.
+- During recording: provider table appends live; segment table shows countdown → temp → saved rows.
+- On Stop: a top row is inserted with full player, download, and size. The tab title shows start→end (duration).
+
+Core Behaviors
+- Live append to provider table during recording.
+- No gaps between segments: next segment starts before prior upload.
+- Robust rendering: provider table is HTMX-refreshable, then updated in-place; segments are client-owned (no HTMX swap during recording).
+- Consistent size labels: parentheses and clickable data-load-full.
+
+Toggles
+- Show segment download & size (toolbar + settings)
+- Show Time column (toolbar only), class: hide-timecol
+
+Troubleshooting
+- If provider table is empty: ensure #fulltable-<id> exists and HTMX refresh triggers once.
+- If segment row flickers: avoid HTMX-swapping segment rows during recording.
+- Ensure microphone permissions are granted.
+
+Implementation Notes
+- Full recording: one continuous MediaRecorder
+- Segments: short-duration MediaRecorder loop
+- AudioWorklet: PCM16 streaming for live STT
+- Events: segment_saved replaces temp row; transcript events append provider table and update segment cells.
+- Countdown: single RAF per record, syncs colspan; removed on Stop.
+
+Contributing
+- Prefer in-place DOM updates during recording.
+- Provider transcript event format: type: 'segment_transcript_<svc>', idx, transcript.
 # AI Generated Business Plan Application
 
 ## Project Plan
