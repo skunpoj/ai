@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastChunkBlob = null; // unused in timeslice mode
     let segmentStartTs = null; // unused in timeslice mode
     let segmentRotate = false; // when true, onstop restarts recorder with new timeslice
+    const USE_COMPAT_SINGLE_RECORDER = true; // Minimal stable mode: one recorder with timeslice for segments
     // Removed client-side ETag caches; htmx triggers drive updates declaratively
 
     // Mobile Wake Lock (Screen) to prevent auto-lock during recording.
@@ -88,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let segmentTimerId = null;
     const transcribeTimeouts = new Map(); // key: `${recId}:${idx}:${svc}` -> timeoutId
     const pendingCellUpdates = new Map(); // key: `${recId}:${idx}:${svc}` -> latest transcript
+    const pendingCellUpdatesByClientId = new Map(); // key: `${recId}:${clientId}:${svc}`
     let audioCtxInstance = null; // Shared AudioContext to fully release audio resources on stop
     let testActiveStream = null; // Tracks settings-modal test recorder stream
     
@@ -164,6 +166,34 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch(_) {}
         throw lastErr || new Error('Failed to acquire microphone');
+    }
+
+    function safelyStopStream(stream) {
+        try {
+            if (stream && stream.getTracks) {
+                const tracks = stream.getTracks();
+                const anyLive = tracks.some(t => (t.readyState === 'live'));
+                if (!anyLive) return;
+                tracks.forEach(t => { try { t.stop(); } catch(_) {} });
+            }
+        } catch(_) {}
+    }
+
+    function createMediaRecorderWithFallback(stream) {
+        const types = [
+            'audio/webm;codecs=opus',
+            'audio/webm',
+            'audio/ogg;codecs=opus',
+            '' // default
+        ];
+        for (const t of types) {
+            try {
+                const opts = t ? { mimeType: t } : undefined;
+                const mr = new MediaRecorder(stream, opts);
+                return { mr, mime: t || (recMimeType || 'audio/webm') };
+            } catch(_) {}
+        }
+        throw new Error('MediaRecorder unsupported');
     }
     async function ensureSocketOpen() {
         try {
@@ -511,10 +541,48 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             currentStream = stream;
             // Full recorder (continuous) collects fullChunks for final full recording
-            mediaRecorder = new MediaRecorder(currentStream, recOptions);
+            try {
+                const { mr, mime } = createMediaRecorderWithFallback(currentStream);
+                mediaRecorder = mr;
+                if (!recMimeType) recMimeType = mime;
+            } catch (e) {
+                console.error('Frontend: Failed to create MediaRecorder with fallbacks:', e);
+                alert(`Recording setup failed. Please try again.${e && (e.name || e.code) ? ` (${e.name || e.code})` : ''}`);
+                safelyStopStream(currentStream);
+                stopCurrentStreamTracks();
+                startRecordingButton.disabled = false;
+                stopRecordingButton.disabled = true;
+                return;
+            }
             fullChunks = [];
             mediaRecorder.ondataavailable = (e) => {
-                if (e.data && e.data.size) fullChunks.push(e.data);
+                if (e.data && e.data.size) {
+                    fullChunks.push(e.data);
+                    if (USE_COMPAT_SINGLE_RECORDER) {
+                        try {
+                            const segBlob = e.data;
+                            const ts = Date.now();
+                            // Insert temp row immediately with client blob URL
+                            try {
+                                const tempUrl = URL.createObjectURL(segBlob);
+                                const startMs = ts;
+                                const endMs = ts + (typeof segmentMs === 'number' ? segmentMs : 10000);
+                                insertTempSegmentRow(currentRecording, ts, tempUrl, segBlob.size, startMs, endMs);
+                            } catch(_) {}
+                            // Upload to backend via WebSocket
+                            try {
+                                if (socket && socket.readyState === WebSocket.OPEN) {
+                                    segBlob.arrayBuffer().then(buf => {
+                                        const b64 = ab2b64(buf);
+                                        try { socket.send(JSON.stringify({ type: 'segment', audio: b64, id: ts, ts, mime: segBlob.type })); } catch(_) {}
+                                    }).catch(()=>{});
+                                }
+                            } catch(_) {}
+                            // Start/refresh countdown for next window
+                            try { showPendingCountdown(currentRecording.id, segmentMs, () => (!!mediaRecorder && mediaRecorder.state === 'recording'), () => (!!mediaRecorder && mediaRecorder.state === 'recording')); } catch(_) {}
+                        } catch(_) {}
+                    }
+                }
             };
 
             // Build AudioWorklet graph for PCM16 capture (replaces deprecated ScriptProcessorNode)
@@ -572,19 +640,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     // ensure default disabled state for stop when auto is off
                     stopTranscribeButton.disabled = true;
                 }
-                try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); }
-                catch (e) {
-                    console.warn('Frontend: mediaRecorder.start failed:', e);
-                    alert(`Recording setup failed. Please try again.${e && (e.name || e.code) ? ` (${e.name || e.code})` : ''}`);
-                    try { if (currentStream && currentStream.getTracks) currentStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
-                    stopCurrentStreamTracks();
-                    startRecordingButton.disabled = false;
-                    stopRecordingButton.disabled = true;
-                    return;
+                if (USE_COMPAT_SINGLE_RECORDER) {
+                    try { mediaRecorder.start(segmentMs); console.log('Frontend: Full recorder started (timeslice=', segmentMs, ').'); } catch (e) {
+                        console.warn('Frontend: mediaRecorder.start(timeslice) failed:', e);
+                        alert(`Recording setup failed. Please try again.${e && (e.name || e.code) ? ` (${e.name || e.code})` : ''}`);
+                        try { if (currentStream && currentStream.getTracks) currentStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
+                        stopCurrentStreamTracks();
+                        startRecordingButton.disabled = false;
+                        stopRecordingButton.disabled = true;
+                        return;
+                    }
+                    try { showPendingCountdown(currentRecording.id, segmentMs, () => (!!mediaRecorder && mediaRecorder.state === 'recording'), () => (!!mediaRecorder && mediaRecorder.state === 'recording')); } catch(_) {}
+                } else {
+                    try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); }
+                    catch (e) {
+                        console.warn('Frontend: mediaRecorder.start failed:', e);
+                        alert(`Recording setup failed. Please try again.${e && (e.name || e.code) ? ` (${e.name || e.code})` : ''}`);
+                        try { if (currentStream && currentStream.getTracks) currentStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
+                        stopCurrentStreamTracks();
+                        startRecordingButton.disabled = false;
+                        stopRecordingButton.disabled = true;
+                        return;
+                    }
+                    startSegmentLoop();
+                    // Ensure first pending row is created and subsequent cycles keep a visible countdown row
+                    try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
                 }
-                startSegmentLoop();
-                // Ensure first pending row is created and subsequent cycles keep a visible countdown row
-                try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
                 // Attach WS message handler for UI updates as a fallback when SSE isn't available
                 try {
                     const handleSegmentSaved = async (data) => {
@@ -617,6 +698,17 @@ document.addEventListener('DOMContentLoaded', () => {
                                             if (td) td.textContent = txt;
                                         }
                                         pendingCellUpdates.delete(key);
+                                    }
+                                    // Also flush updates keyed by clientId if present
+                                    const key2 = `${rec.id}:${data.id}:${svc}`;
+                                    if (pendingCellUpdatesByClientId.has(key2)) {
+                                        const txt = pendingCellUpdatesByClientId.get(key2);
+                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                        if (row) {
+                                            const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                            if (td) td.textContent = txt;
+                                        }
+                                        pendingCellUpdatesByClientId.delete(key2);
                                     }
                                 }
                             } catch(_) {}
@@ -698,20 +790,29 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (msg.error) console.log(`[WS:${msg.type}] error`, msg.error);
                             const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || null);
                             if (!rec) return;
-                            const segIndex = (typeof msg.idx === 'number') ? msg.idx : -1;
-                            if (segIndex < 0) { console.log(`[WS:${msg.type}] missing idx, skip`, msg); return; }
+                            let segIndex = (typeof msg.idx === 'number') ? msg.idx : -1;
+                            if (segIndex < 0 && typeof msg.id === 'number') {
+                                // Fallback to client timestamp id mapping
+                                try {
+                                    const found = rec.segments.find(s => s && s.clientId === msg.id);
+                                    if (found) segIndex = found.idx;
+                                } catch(_) {}
+                            }
+                            if (segIndex < 0) { console.log(`[WS:${msg.type}] missing idx/id, queueing by client id`, msg); }
                             try {
                                 let svc = (msg.type || '').replace('segment_transcript_', '') || '';
                                 if (!svc) svc = msg.svc || msg.provider || msg.service || '';
                                 if (svc) {
                                     const arr = (rec.transcripts[svc] = rec.transcripts[svc] || []);
-                                    while (arr.length <= segIndex) arr.push('');
-                                    if (typeof msg.transcript === 'string') arr[segIndex] = msg.transcript;
-                                    clearSvcTimeout(rec.id, segIndex, svc);
+                                    if (segIndex >= 0) {
+                                        while (arr.length <= segIndex) arr.push('');
+                                        if (typeof msg.transcript === 'string') arr[segIndex] = msg.transcript;
+                                        clearSvcTimeout(rec.id, segIndex, svc);
+                                    }
                                     // Append once per svc:segment and update full provider cell in-place
                                     if (typeof msg.transcript === 'string' && msg.transcript.trim()) {
                                         rec._appended = rec._appended || {};
-                                        const key = `${svc}:${segIndex}`;
+                                        const key = `${svc}:${segIndex >= 0 ? segIndex : msg.id}`;
                                         if (!rec._appended[key]) {
                                             rec.fullAppend = rec.fullAppend || {};
                                             const prev = rec.fullAppend[svc] || '';
@@ -730,12 +831,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                     }
                                     // Direct DOM update for segment cell (no HTMX swap)
                                     try {
-                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
-                                        if (row) {
-                                            const td = row.querySelector(`td[data-svc="${svc}"]`);
-                                            if (td && typeof msg.transcript === 'string') td.textContent = msg.transcript;
-                                        } else if (typeof msg.transcript === 'string') {
-                                            pendingCellUpdates.set(`${rec.id}:${segIndex}:${svc}`, msg.transcript);
+                                        if (segIndex >= 0) {
+                                            const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                            if (row) {
+                                                const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                                if (td && typeof msg.transcript === 'string') td.textContent = msg.transcript;
+                                            } else if (typeof msg.transcript === 'string') {
+                                                pendingCellUpdates.set(`${rec.id}:${segIndex}:${svc}`, msg.transcript);
+                                            }
+                                        } else if (typeof msg.transcript === 'string' && typeof msg.id === 'number') {
+                                            pendingCellUpdatesByClientId.set(`${rec.id}:${msg.id}:${svc}`, msg.transcript);
                                         }
                                     } catch(_) {}
                                 }
@@ -1257,7 +1362,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (!testBlob) { if (testResults) testResults.textContent = 'No audio selected.'; return; }
                 const buf = await testBlob.arrayBuffer();
-                const b64 = arrayBufferToBase64(buf);
+                const b64 = ab2b64(buf);
                 const mime = (testBlob.type || 'audio/webm');
                 // determine selected providers (checked boxes)
                 const selected = [];
