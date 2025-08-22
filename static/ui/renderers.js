@@ -36,6 +36,9 @@ export async function renderRecordingPanel(record) {
   const services = (await getServices()).filter(s => !!s.enabled);
 
   let segRowsHtml = '';
+  // Full row placeholder at top: first cell label, second time cell, then provider fullAppend cells
+  const fullCells = services.map(svc => `<td data-svc="${svc.key}">${record.fullAppend[svc.key] || ''}</td>`).join('');
+  segRowsHtml += `<tr id="fullrowline-${record.id}"><td id="fullcell-${record.id}" style="white-space:nowrap">Full</td><td data-col="time"></td>${fullCells}</tr>`;
   const presentIdx = [];
   for (let i = 0; i < record.segments.length; i++) if (record.segments[i]) presentIdx.push(i);
   presentIdx.sort((a, b) => b - a);
@@ -44,10 +47,12 @@ export async function renderRecordingPanel(record) {
     const segMime = (seg && seg.url && seg.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
     const sl = seg && seg.size ? bytesToLabel(seg.size) : '';
     const segUrl = seg && seg.url ? seg.url : '';
+    const timeStr = (seg && seg.startMs && seg.endMs)
+      ? `${formatElapsed(seg.startMs - (record.startTs || seg.startMs))} – ${formatElapsed(seg.endMs - (record.startTs || seg.endMs))}`
+      : '';
     const leftCells = `
       <td>${segUrl ? `<audio controls><source src="${segUrl}" type="${segMime}"></audio>` : ''} ${segUrl ? `<a href="${segUrl}" download title="Download" data-load-full="${segUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : ''} ${sl ? `<small id="segsize-${record.id}-${i}" data-load-full="${segUrl}" style="cursor:pointer">(${sl})</small>` : ''}</td>
-      <td>${seg && seg.startMs ? formatElapsed(seg.startMs - (record.startTs || seg.startMs)) : ''}</td>
-      <td>${seg && seg.endMs ? formatElapsed(seg.endMs - (record.startTs || seg.endMs)) : ''}</td>
+      <td data-col="time">${timeStr}</td>
     `;
     const svcCells = services.map(svc => {
       const val = (record.transcripts[svc.key] && typeof record.transcripts[svc.key][i] !== 'undefined') ? (record.transcripts[svc.key][i] || '') : '';
@@ -60,54 +65,18 @@ export async function renderRecordingPanel(record) {
     segRowsHtml += `<tr id="segrow-${record.id}-${i}" hx-post="/render/segment_row" hx-trigger="refresh-row" hx-target="this" hx-swap="outerHTML" hx-vals="${hxVals}">${leftCells}${svcCells}</tr>`;
   }
 
-  const fullCells = services.map(svc => `<td data-svc="${svc.key}">${record.fullAppend[svc.key] || ''}</td>`).join('');
   const fullHxVals = JSON.stringify({ record: JSON.stringify(record) }).replace(/"/g, '&quot;');
 
   panel.innerHTML = `
     <div>
-      <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
-        <tbody>
-          <tr>
-            <td style="padding:0"></td>
-            <td style="padding:0"></td>
-            <td style="padding:0"></td>
-            <td style="padding:0"><h3 style="margin:0;padding:0">Full Record</h3></td>
-          </tr>
-          <tr>
-            <td style="padding:0"></td>
-            <td style="padding:0"></td>
-            <td style="padding:0"></td>
-            <td style="padding:0"><div style="margin-bottom:8px">${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}</div></td>
-          </tr>
-          <tr>
-            <td style="padding:0"></td>
-            <td style="padding:0"></td>
-            <td style="padding:0"></td>
-            <td style="padding:0"><div id="recordmeta-${record.id}" style="margin-bottom:8px">${playerAndDownload}</div></td>
-          </tr>
-        </tbody>
-      </table>
-      <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
-        <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
-          <thead>
-            <tr>
-              ${services.map(s => `<th style="border:0">${s.label}</th>`).join('')}
-            </tr>
-          </thead>
-          <tbody>
-            <tr>${fullCells}</tr>
-          </tbody>
-        </table>
-      </div>
+      
     </div>
     <div style="margin-top:12px">
-      <h3>Segments</h3>
       <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
         <thead>
           <tr>
             <th style="border:0">Segment</th>
-            <th style="border:0">Start</th>
-            <th style="border:0">End</th>
+            <th style="border:0" data-col="time">Time</th>
             ${services.map(s => `<th style=\"border:0\">${s.label}</th>`).join('')}
           </tr>
         </thead>

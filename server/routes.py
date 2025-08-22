@@ -36,6 +36,11 @@ hr { display:none; }
 .hide-segmeta tbody[id^="segtbody-"] a[download][data-load-full] {
   display: none !important;
 }
+/* Hide combined Time column when toggled off (separate toggle) */
+.hide-timecol th[data-col="time"],
+.hide-timecol td[data-col="time"] {
+  display: none !important;
+}
         """), \
         Div(
             Div(
@@ -48,6 +53,8 @@ hr { display:none; }
                 Label("Auto Transcribe", _for="autoTranscribeToggle"),
                 Input(type="checkbox", id="toggleSegMetaToolbar", checked=True),
                 Label("Show segment download & size", _for="toggleSegMetaToolbar"),
+                Input(type="checkbox", id="toggleTimeColToolbar", checked=True),
+                Label("Show Time column", _for="toggleTimeColToolbar"),
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
             ),
@@ -128,7 +135,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
                 Td("", style="padding:0"),
                 Td("", style="padding:0"),
                 Td("", style="padding:0"),
-                Td(H3("Full Record", style="margin:0;padding:0"), style="padding:0")
+                # Td(H3("Full Record", style="margin:0;padding:0"), style="padding:0")
             ),
             Tr(
                 Td("", style="padding:0"),
@@ -171,8 +178,24 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     )
 
     # Segments table
-    seg_header = Tr(Th("Segment", style="border:0;padding:0"), Th("Start", style="border:0;padding:0"), Th("End", style="border:0;padding:0"), *[Th(s["label"], style="border:0;padding:0") for s in services])
+    seg_header = Tr(
+        Th("Segment", style="border:0;padding:0"),
+        Th("Time", style="border:0;padding:0", data_col="time"),
+        *[Th(s["label"], style="border:0;padding:0") for s in services]
+    )
     seg_rows: List[Any] = []
+    # Prepend a full-record line at top; provider cells show cumulative transcript during recording
+    full_line_cells: List[Any] = []
+    for s in services:
+        full_line_cells.append(Td(((record.get("fullAppend", {}) or {}).get(s["key"], "")), data_svc=s["key"]))
+    seg_rows.append(
+        Tr(
+            Td("Full", id=f"fullcell-{record.get('id','')}", style="white-space:nowrap"),
+            Td("", data_col="time", id=f"fulltime-{record.get('id','')}") ,
+            *full_line_cells,
+            id=f"fullrowline-{record.get('id','')}"
+        )
+    )
     segments: List[Dict[str, Any]] = record.get("segments", []) or []
     transcripts: Dict[str, List[str]] = record.get("transcripts", {}) or {}
     # Determine max rows across all providers
@@ -192,10 +215,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     )
 
     panel = Div(
-        meta_table,
-        full_table,
         Div(
-            H3("Segments"),
             seg_table,
             style="margin-top:12px")
     )
@@ -252,8 +272,13 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
             except Exception:
                 seg_cell_children.append(Space(f" ({kb} KB)"))
     seg_cell = Td(*seg_cell_children)
-    start_cell = Td(("" if not seg else ("" if not seg.get("startMs") else str(_fmt_time(seg["startMs"])))))
-    end_cell = Td(("" if not seg else ("" if not seg.get("endMs") else str(_fmt_time(seg["endMs"])))))
+    time_str = ""
+    try:
+        if seg and seg.get("startMs") and seg.get("endMs"):
+            time_str = f"{_fmt_time(seg['startMs'])} – {_fmt_time(seg['endMs'])}"
+    except Exception:
+        time_str = ""
+    time_cell = Td(time_str, data_col="time")
     svc_cells = []
     timeouts: Dict[str, List[bool]] = (record.get("timeouts") or {}) if isinstance(record, dict) else {}
     for s in services:
@@ -269,8 +294,7 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
     import json as __json
     return Tr(
         seg_cell,
-        start_cell,
-        end_cell,
+        time_cell,
         *svc_cells,
         id=f"segrow-{record.get('id','')}-{idx}",
         hx_post="/render/segment_row",
@@ -343,7 +367,14 @@ def render_full_row(req) -> Any:
         for s in services:
             val = ((record.get("fullAppend", {}) or {}).get(s["key"], ""))
             if not full_cells and first_cell_bits:
-                full_cells.append(Td(*first_cell_bits, data_svc=s["key"]))
+                # Include download/size plus full text, so updates are visible without client-side patching
+                bits: List[Any] = list(first_cell_bits)
+                if val:
+                    try:
+                        bits += [Space(" "), Span(val, cls="full-text")]
+                    except Exception:
+                        bits += [Space(" "), val]
+                full_cells.append(Td(*bits, data_svc=s["key"]))
             else:
                 full_cells.append(Td(val, data_svc=s["key"]))
         full_row = Tr(*full_cells, id=f"fullrow-{record.get('id','')}")

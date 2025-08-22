@@ -4,7 +4,7 @@ import { bytesToLabel } from '/static/ui/format.js';
 import { ensureTab as ensureUITab, activateTab as activateUITab } from '/static/ui/tabs.js';
 import { renderRecordingPanel as renderPanel } from '/static/ui/renderers.js';
 import { buildWSUrl, parseWSMessage, sendJSON, arrayBufferToBase64, ensureOpenSocket } from '/static/ui/ws.js';
-import { showPendingCountdown, prependSegmentRow } from '/static/ui/segments.js';
+import { showPendingCountdown, prependSegmentRow, insertTempSegmentRow } from '/static/ui/segments.js';
 import { setButtonsOnStart, setButtonsOnStop } from '/static/ui/recording.js';
 
 // Main frontend controller: wires recording controls, websocket, segments loop,
@@ -231,6 +231,31 @@ document.addEventListener('DOMContentLoaded', () => {
                     localStorage.setItem(key, String(on));
                     apply(on);
                     if (toggleSegMeta) toggleSegMeta.checked = on;
+                });
+            }
+        } catch(_) {}
+    })();
+
+    // Separate toggle for Time column (toolbar only)
+    (function wireTimeColToggle(){
+        try {
+            const toggleTimeColToolbar = document.getElementById('toggleTimeColToolbar');
+            const key = 'ui.showTimeCol';
+            const apply = (on) => {
+                const root = document.documentElement || document.body;
+                if (!root) return;
+                if (on) root.classList.remove('hide-timecol');
+                else root.classList.add('hide-timecol');
+            };
+            const saved = localStorage.getItem(key);
+            const initial = saved === null ? true : (saved === 'true');
+            apply(initial);
+            if (toggleTimeColToolbar) {
+                toggleTimeColToolbar.checked = initial;
+                toggleTimeColToolbar.addEventListener('change', () => {
+                    const on = !!toggleTimeColToolbar.checked;
+                    localStorage.setItem(key, String(on));
+                    apply(on);
                 });
             }
         } catch(_) {}
@@ -480,6 +505,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             const startMs = typeof data.ts === 'number' ? data.ts : Date.now();
                             const endMs = startMs + (typeof segmentMs === 'number' ? segmentMs : 10000);
                             rec.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs, endMs, clientId: data.id };
+                            // Remove any temp row for this client timestamp
+                            try { const temp = document.getElementById(`segtemp-${rec.id}-${data.id}`); if (temp && temp.parentElement) temp.parentElement.removeChild(temp); } catch(_) {}
                             // Use shared helper to create the row immediately so playback appears in-session
                             try { await prependSegmentRow(rec, segIndex, data, startMs, endMs); } catch(e) { console.log('Frontend: prependSegmentRow failed', e); }
                             // Re-create a fresh countdown row for the next segment window
@@ -693,6 +720,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     segmentRecorder.onstop = async () => {
                         if (segBlob && segBlob.size) {
                             console.log('Frontend: Segment available:', segBlob.size, 'bytes');
+                            // Insert a temp row immediately with client blob URL to avoid UI gap
+                            try {
+                                const tempUrl = URL.createObjectURL(segBlob);
+                                insertTempSegmentRow(currentRecording, ts, tempUrl, segBlob.size, ts, ts + (typeof segmentMs === 'number' ? segmentMs : 10000));
+                            } catch(_) {}
                             // UI for segments handled in renderRecordingPanel upon server echo
                             try {
                                 if (socket.readyState === WebSocket.OPEN) {
@@ -739,6 +771,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     currentRecording.audioUrl = audioUrl;
                     currentRecording.clientSizeBytes = audioBlob.size;
                     console.log('Frontend: Updated current recording with audioUrl:', currentRecording);
+                    // Insert full player/icon/size into the first row of the segments table
+                    try {
+                        const fullCell = document.getElementById(`fullcell-${currentRecording.id}`);
+                        if (fullCell) {
+                            const mime = (audioUrl && audioUrl.toLowerCase().includes('.ogg')) ? 'audio/ogg' : (recMimeType || 'audio/webm');
+                            const kb = Math.max(1, Math.round((audioBlob.size || 0)/1024));
+                            const sizeHtml = kb ? ` <small>(${kb} KB)</small>` : '';
+                            const playerHtml = `<audio controls><source src="${audioUrl}" type="${mime}"></audio>`;
+                            const dlHtml = `<a href="${audioUrl}" download title="Download" style="cursor:pointer;text-decoration:none">📥</a>`;
+                            fullCell.innerHTML = `${playerHtml} ${dlHtml}${sizeHtml}`;
+                        }
+                        const fullTime = document.getElementById(`fulltime-${currentRecording.id}`);
+                        if (fullTime) {
+                            const startStr = new Date(currentRecording.startTs).toLocaleTimeString();
+                            const endStr = new Date(currentRecording.stopTs).toLocaleTimeString();
+                            const durS = Math.max(0, Math.round((currentRecording.durationMs || 0)/1000));
+                            fullTime.textContent = `Start: ${startStr} · End: ${endStr} · Duration: ${durS}s`;
+                        }
+                    } catch(_) {}
                 }
                 // Upload full recording before closing socket
                 try {
@@ -748,7 +799,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         sendJSON(socket, { type: 'full_upload', audio: b64full, mime: recMimeType || 'audio/webm' });
                     }
                 } catch (_) {}
-                // Keep persistent socket alive; do not send end_stream or close here
+                // Close socket as requested; will reopen on next Start Recording
+                try { if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) socket.close(); } catch(_) {}
                 if (currentRecording) renderRecordingPanel(currentRecording);
                 currentRecording = null; // Reset for next session (recordings array keeps history)
             };

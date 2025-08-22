@@ -67,15 +67,14 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   const mime = (data.url && data.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
   const sizeHtml = sizeLabel ? `<small id="segsize-${record.id}-${segIndex}" data-load-full="${data.url || ''}" style="cursor:pointer">${sizeLabel}</small>` : '';
   audioCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
-  const startCell = document.createElement('td');
-  startCell.style.padding = '0';
-  startCell.textContent = formatElapsed(startMs - (record.startTs || startMs));
-  const endCell = document.createElement('td');
-  endCell.style.padding = '0';
-  endCell.textContent = formatElapsed(endMs - (record.startTs || endMs));
+  const timeCell = document.createElement('td');
+  timeCell.style.padding = '0';
+  timeCell.setAttribute('data-col', 'time');
+  const startStr = formatElapsed(startMs - (record.startTs || startMs));
+  const endStr = formatElapsed(endMs - (record.startTs || endMs));
+  timeCell.textContent = `${startStr} – ${endStr}`;
   tr.appendChild(audioCell);
-  tr.appendChild(startCell);
-  tr.appendChild(endCell);
+  tr.appendChild(timeCell);
   try {
     const services = await getServicesCached();
     services.filter(s => s.enabled).forEach(s => {
@@ -90,6 +89,37 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
   tbody.insertBefore(tr, tbody.firstChild);
   return tr;
+}
+
+export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs) {
+  try {
+    const tbody = document.getElementById(`segtbody-${record.id}`);
+    if (!tbody) return null;
+    const tempId = `segtemp-${record.id}-${clientTs}`;
+    if (document.getElementById(tempId)) return document.getElementById(tempId);
+    const tr = document.createElement('tr');
+    tr.id = tempId;
+    tr.setAttribute('data-client-ts', String(clientTs));
+    const audioCell = document.createElement('td');
+    audioCell.style.padding = '0';
+    const kb = size ? `(${(size/1024).toFixed(0)} KB)` : '';
+    const mime = (url && url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
+    const sizeHtml = kb ? `<small style="cursor:default">${kb}</small>` : '';
+    audioCell.innerHTML = `${url ? `<audio controls><source src="${url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
+    const startCell = document.createElement('td');
+    startCell.style.padding = '0';
+    startCell.textContent = formatElapsed(startMs - (record.startTs || startMs));
+    const endCell = document.createElement('td');
+    endCell.style.padding = '0';
+    endCell.textContent = formatElapsed(endMs - (record.startTs || endMs));
+    tr.appendChild(audioCell);
+    tr.appendChild(startCell);
+    tr.appendChild(endCell);
+    const pending = document.getElementById(`segpending-${record.id}`);
+    if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
+    tbody.insertBefore(tr, tbody.firstChild);
+    return tr;
+  } catch(_) { return null; }
 }
 
 export function formatElapsed(deltaMs) {
