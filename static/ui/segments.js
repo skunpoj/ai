@@ -105,7 +105,13 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
       tr.appendChild(td);
     });
   } catch(_) {}
-  tbody.insertBefore(tr, tbody.firstChild);
+  // Keep countdown row (segpending-<id>) at the very top; insert new row right after it if present
+  const pendingTop = document.getElementById(`segpending-${record.id}`);
+  if (pendingTop && pendingTop.parentElement === tbody) {
+    try { tbody.insertBefore(tr, pendingTop.nextSibling); } catch(_) { tbody.insertBefore(tr, tbody.firstChild); }
+  } else {
+    tbody.insertBefore(tr, tbody.firstChild);
+  }
   return tr;
 }
 
@@ -135,9 +141,13 @@ export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs
     tr.appendChild(audioCell);
     tr.appendChild(startCell);
     tr.appendChild(endCell);
-    const pending = document.getElementById(`segpending-${record.id}`);
-    if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
-    tbody.insertBefore(tr, tbody.firstChild);
+    // Keep countdown row pinned to top; insert temp row right after it
+    const pendingTop = document.getElementById(`segpending-${record.id}`);
+    if (pendingTop && pendingTop.parentElement === tbody) {
+      try { tbody.insertBefore(tr, pendingTop.nextSibling); } catch(_) { tbody.insertBefore(tr, tbody.firstChild); }
+    } else {
+      tbody.insertBefore(tr, tbody.firstChild);
+    }
     return tr;
   } catch(_) { return null; }
 }

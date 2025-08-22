@@ -3,9 +3,11 @@ import { getServices, getServicesCached } from '/static/ui/services.js';
 import { bytesToLabel } from '/static/ui/format.js';
 import { ensureTab as ensureUITab, activateTab as activateUITab } from '/static/ui/tabs.js';
 import { renderRecordingPanel as renderPanel } from '/static/ui/renderers.js';
-import { buildWSUrl, parseWSMessage, sendJSON, arrayBufferToBase64, ensureOpenSocket } from '/static/ui/ws.js';
+import { buildWSUrl, parseWSMessage, sendJSON, ensureOpenSocket } from '/static/ui/ws.js';
 import { showPendingCountdown, prependSegmentRow, insertTempSegmentRow } from '/static/ui/segments.js';
 import { setButtonsOnStart, setButtonsOnStop } from '/static/ui/recording.js';
+import { acquireWakeLock, releaseWakeLock, initWakeLockVisibilityReacquire } from '/static/app/wake_lock.js';
+import { createSegmentLoop, arrayBufferToBase64 as ab2b64 } from '/static/app/segment_loop.js';
 
 // Main frontend controller: wires recording controls, websocket, segments loop,
 // tabbed UI, and dynamic provider columns.
@@ -32,6 +34,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let segmentStartTs = null; // unused in timeslice mode
     let segmentRotate = false; // when true, onstop restarts recorder with new timeslice
     // Removed client-side ETag caches; htmx triggers drive updates declaratively
+
+    // Mobile Wake Lock (Screen) to prevent auto-lock during recording.
+    // - Acquired on Start Recording; released on Stop Recording
+    // - Reacquired on visibilitychange when returning to the page
+    // Reacquire wake lock on visibility when recording
+    initWakeLockVisibilityReacquire(() => (!!(mediaRecorder && mediaRecorder.state === 'recording') || !!segmentLoopActive));
 
     const startRecordingButton = document.getElementById('startRecording');
     const stopRecordingButton = document.getElementById('stopRecording');
@@ -398,6 +406,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (liveTranscriptContainer) liveTranscriptContainer.innerHTML = '';
 
         console.log("Frontend: Start Recording button clicked.");
+        // Prevent mobile devices from auto-locking while recording
+        try { await acquireWakeLock(); } catch(_) {}
 
         // Transcription control is via buttons; default off at start
         enableGoogleSpeech = false;
@@ -696,48 +706,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 return btoa(chunks.join(''));
             }
 
-            /**
-             * Start the per-segment recorder loop. Each iteration records a short
-             * container (WebM/OGG) so server-side STT handles clean headers.
-             */
-            function startSegmentLoop() {
-                if (segmentLoopActive) return;
-                segmentLoopActive = true;
-                const loopOnce = () => {
-                    if (!segmentLoopActive) return;
-                    const ts = Date.now();
-                    try { segmentRecorder = new MediaRecorder(currentStream, recOptions); } catch (e) { console.warn('Frontend: segmentRecorder create failed:', e); segmentLoopActive = false; return; }
-                    let segBlob = null;
-                    segmentRecorder.ondataavailable = (e) => { if (e.data && e.data.size) segBlob = e.data; };
-                    segmentRecorder.onstop = async () => {
-                        // Start next segment immediately to avoid gaps, then upload previous blob
-                        if (segmentLoopActive) setTimeout(loopOnce, 0);
-                        if (segBlob && segBlob.size) {
-                            console.log('Frontend: Segment available:', segBlob.size, 'bytes');
-                            // Insert a temp row immediately with client blob URL to avoid UI gap
-                            try {
-                                const tempUrl = URL.createObjectURL(segBlob);
-                                insertTempSegmentRow(currentRecording, ts, tempUrl, segBlob.size, ts, ts + (typeof segmentMs === 'number' ? segmentMs : 10000));
-                            } catch(_) {}
-                            // Upload in background after next segment has started
-                            try {
-                                if (socket.readyState === WebSocket.OPEN) {
-                                    const arrayBuffer = await segBlob.arrayBuffer();
-                                    const b64seg = arrayBufferToBase64(arrayBuffer);
-                                    socket.send(JSON.stringify({ type: 'segment', audio: b64seg, id: ts, ts, mime: segBlob.type }));
-                                }
-                            } catch (_) {}
-                        }
-                    };
-                    try { segmentRecorder.start(); } catch (e) { console.warn('Frontend: segmentRecorder start failed:', e); segmentLoopActive = false; return; }
-                    // Live countdown for this segment in a pending top row within the segments table
-                    try {
-                        showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording'));
-                    } catch(_) {}
-                    setTimeout(() => { try { if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch (_) {} }, segmentMs);
-                };
-                loopOnce();
-            }
+            const startSegmentLoop = createSegmentLoop(
+                () => currentStream,
+                () => recOptions,
+                () => segmentMs,
+                // onSegmentStart: show countdown for the fresh recorder instance
+                (recorder) => { try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (recorder && recorder.state === 'recording')); } catch(_) {} },
+                // uploadSegment: encode and send to WS
+                async (ts, blob) => {
+                    try { const arrayBuffer = await blob.arrayBuffer(); const b64 = ab2b64(arrayBuffer); socket.send(JSON.stringify({ type: 'segment', audio: b64, id: ts, ts, mime: blob.type })); } catch(_) {}
+                },
+                () => currentRecording,
+                () => segmentLoopActive,
+                (active) => { segmentLoopActive = active; },
+                socket
+            );
 
             /**
              * Stop the repeating segment recorder loop.
@@ -834,6 +817,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     stopRecordingButton.addEventListener('click', () => {
         console.log("Frontend: Stop Recording button clicked.");
+        // Release wake lock now that we're stopping recording
+        try { releaseWakeLock(); } catch(_) {}
         startRecordingButton.disabled = false;
         stopRecordingButton.disabled = true;
         startTranscribeButton.disabled = true; // disable transcribe controls when not recording
