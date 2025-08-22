@@ -36,6 +36,21 @@ export async function renderRecordingPanel(record) {
   const services = (await getServices()).filter(s => !!s.enabled);
 
   let segRowsHtml = '';
+  // If recording has stopped and we have a full recording URL, insert a top full row
+  let fullTopHtml = '';
+  try {
+    if (record && record.stopTs && (record.serverUrl || record.audioUrl)) {
+      const url = record.serverUrl || record.audioUrl;
+      const bytes = (typeof record.serverSizeBytes === 'number' && record.serverSizeBytes > 0) ? record.serverSizeBytes : (record.clientSizeBytes || 0);
+      const kb = bytes ? Math.max(1, Math.round(bytes/1024)) : 0;
+      const sizeHtml = kb ? ` <small>(${kb} KB)</small>` : '';
+      const playerHtml = `<audio controls><source src="${url}" type="${mime}"></audio>`;
+      const dlHtml = `<a href="${url}" download title="Download" data-load-full="${url}" style="cursor:pointer;text-decoration:none">📥</a>`;
+      // span all columns (Segment + Time + providers)
+      const colCount = 2 + services.length;
+      fullTopHtml = `<tr id="fullrowline-${record.id}"><td colspan="${colCount}">${playerHtml} ${dlHtml}${sizeHtml}</td></tr>`;
+    }
+  } catch(_) {}
   // No Full row during recording; full player is inserted into the top row only on Stop
   const presentIdx = [];
   const segs = Array.isArray(record.segments) ? record.segments : [];
@@ -93,7 +108,7 @@ export async function renderRecordingPanel(record) {
           </tr>
         </thead>
         <tbody id="segtbody-${record.id}">
-          ${segRowsHtml}
+          ${fullTopHtml}${segRowsHtml}
         </tbody>
       </table>
     </div>
