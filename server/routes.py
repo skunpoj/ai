@@ -178,18 +178,6 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         *[Th(s["label"], style="border:0;padding:0") for s in services]
     )
     seg_rows: List[Any] = []
-    # Prepend a full-record line at top; provider cells show cumulative transcript during recording
-    full_line_cells: List[Any] = []
-    for s in services:
-        full_line_cells.append(Td(((record.get("fullAppend", {}) or {}).get(s["key"], "")), data_svc=s["key"]))
-    seg_rows.append(
-        Tr(
-            Td("Full", id=f"fullcell-{record.get('id','')}", style="white-space:nowrap"),
-            Td("", data_col="time", id=f"fulltime-{record.get('id','')}") ,
-            *full_line_cells,
-            id=f"fullrowline-{record.get('id','')}"
-        )
-    )
     segments: List[Dict[str, Any]] = record.get("segments", []) or []
     transcripts: Dict[str, List[str]] = record.get("transcripts", {}) or {}
     # Determine max rows across all providers
@@ -209,6 +197,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     )
 
     panel = Div(
+        full_table,
         Div(
             seg_table,
             style="margin-top:12px")
