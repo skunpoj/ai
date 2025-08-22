@@ -88,6 +88,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let segmentTimerId = null;
     const transcribeTimeouts = new Map(); // key: `${recId}:${idx}:${svc}` -> timeoutId
     const pendingCellUpdates = new Map(); // key: `${recId}:${idx}:${svc}` -> latest transcript
+    let audioCtxInstance = null; // Shared AudioContext to fully release audio resources on stop
     
     // Add a connection status and test button UI elements if not present
     let connStatus = document.getElementById('connStatus');
@@ -468,11 +469,12 @@ document.addEventListener('DOMContentLoaded', () => {
             };
 
             // Build AudioWorklet graph for PCM16 capture (replaces deprecated ScriptProcessorNode)
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            try { await audioCtx.audioWorklet.addModule('/static/audio/pcm-worklet.js'); } catch (e) { console.warn('Frontend: failed to add worklet, falling back', e); }
-            if (audioCtx.audioWorklet) {
-            const source = audioCtx.createMediaStreamSource(stream);
-                const workletNode = new AudioWorkletNode(audioCtx, 'pcm16-worklet', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
+            try { if (audioCtxInstance && typeof audioCtxInstance.close === 'function') await audioCtxInstance.close(); } catch(_) {}
+            audioCtxInstance = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            try { await audioCtxInstance.audioWorklet.addModule('/static/audio/pcm-worklet.js'); } catch (e) { console.warn('Frontend: failed to add worklet, falling back', e); }
+            if (audioCtxInstance.audioWorklet) {
+            const source = audioCtxInstance.createMediaStreamSource(stream);
+                const workletNode = new AudioWorkletNode(audioCtxInstance, 'pcm16-worklet', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
                 workletNode.port.onmessage = ev => {
                 if (!enableGoogleSpeech || !socket || socket.readyState !== WebSocket.OPEN) return;
                     const bytes = new Uint8Array(ev.data);
@@ -485,7 +487,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 try { socket.send(JSON.stringify({ pcm16: b64 })); } catch (_) {}
             };
                 source.connect(workletNode);
-                workletNode.connect(audioCtx.destination);
+                workletNode.connect(audioCtxInstance.destination);
             }
 
             // Ensure persistent WebSocket is open; reuse if already open/connecting
@@ -722,7 +724,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 () => recOptions,
                 () => segmentMs,
                 // onSegmentStart: show countdown for the fresh recorder instance
-                (recorder) => { try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (recorder && recorder.state === 'recording')); } catch(_) {} },
+                (recorder) => { 
+                    // Track the currently active segment MediaRecorder so we can stop it on demand
+                    segmentRecorder = recorder;
+                    try { recorder.addEventListener('stop', () => { if (segmentRecorder === recorder) segmentRecorder = null; }); } catch(_) {}
+                    try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (recorder && recorder.state === 'recording')); } catch(_) {}
+                },
                 // uploadSegment: encode and send to WS
                 async (ts, blob) => {
                     try { const arrayBuffer = await blob.arrayBuffer(); const b64 = ab2b64(arrayBuffer); socket.send(JSON.stringify({ type: 'segment', audio: b64, id: ts, ts, mime: blob.type })); } catch(_) {}
@@ -739,6 +746,8 @@ document.addEventListener('DOMContentLoaded', () => {
             function stopSegmentLoop() {
                 segmentLoopActive = false;
                 try { if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch (_) {}
+                // Clear reference so future checks don't hold onto a stale recorder
+                segmentRecorder = null;
             }
 
             // Finalize the full recording; upload the blob, and close the socket
@@ -749,6 +758,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (currentRecording) { currentRecording.stopTs = stopTs; currentRecording.durationMs = stopTs - (currentRecording.startTs || stopTs); }
 
                 stopSegmentLoop();
+                // Close audio context to fully release any audio resources
+                try { if (audioCtxInstance && typeof audioCtxInstance.close === 'function') await audioCtxInstance.close(); } catch(_) {}
+                audioCtxInstance = null;
                 const audioBlob = new Blob(fullChunks, { type: recMimeType || 'audio/webm' });
                 const audioUrl = URL.createObjectURL(audioBlob);
                 console.log('Frontend: Generated audio URL:', audioUrl);
@@ -836,6 +848,11 @@ document.addEventListener('DOMContentLoaded', () => {
         stopRecordingButton.disabled = true;
         startTranscribeButton.disabled = true; // disable transcribe controls when not recording
         stopTranscribeButton.disabled = true;
+        // Immediately stop segment loop to avoid starting a new segment after user stops
+        try { segmentLoopActive = false; } catch(_) {}
+        try { if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch(_) {}
+        try { if (audioCtxInstance && typeof audioCtxInstance.close === 'function') audioCtxInstance.close(); } catch(_) {}
+        audioCtxInstance = null;
         pendingStop = true;
         if (autoTranscribeToggle && autoTranscribeToggle.checked) {
             // Ensure we notify backend to stop transcribe when auto mode ends
@@ -1150,6 +1167,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     testBlob = new Blob(chunks, { type: 'audio/webm' });
                     if (testAudio) testAudio.src = URL.createObjectURL(testBlob);
                     if (testResults) testResults.textContent = 'Recorded 2s sample.';
+                    // Ensure stream tracks are released to prevent lingering "mic in use"
+                    try { stream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
                 };
                 rec.start();
                 setTimeout(() => { try { rec.stop(); } catch(_) {} }, 2000);
