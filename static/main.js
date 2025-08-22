@@ -89,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const transcribeTimeouts = new Map(); // key: `${recId}:${idx}:${svc}` -> timeoutId
     const pendingCellUpdates = new Map(); // key: `${recId}:${idx}:${svc}` -> latest transcript
     let audioCtxInstance = null; // Shared AudioContext to fully release audio resources on stop
+    let testActiveStream = null; // Tracks settings-modal test recorder stream
     
     // Add a connection status and test button UI elements if not present
     let connStatus = document.getElementById('connStatus');
@@ -138,6 +139,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         });
+    }
+
+    // Request microphone with progressive fallbacks to avoid overconstrained errors
+    async function getMicStreamWithFallback() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('getUserMedia not supported in this browser');
+        }
+        const attempts = [
+            { audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1, sampleRate: 48000 } },
+            { audio: { echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, channelCount: { ideal: 1 }, sampleRate: { ideal: 48000 } } },
+            { audio: true }
+        ];
+        let lastErr = null;
+        for (const constraints of attempts) {
+            try { return await navigator.mediaDevices.getUserMedia(constraints); } catch (e) { lastErr = e; }
+        }
+        // Try with a specific audioinput deviceId if available
+        try {
+            const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d && d.kind === 'audioinput');
+            for (const d of devices) {
+                try { return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: d.deviceId } } }); } catch(_) {}
+                try { return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { ideal: d.deviceId } } }); } catch(_) {}
+            }
+        } catch(_) {}
+        throw lastErr || new Error('Failed to acquire microphone');
     }
     async function ensureSocketOpen() {
         try {
@@ -443,10 +469,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // No separate placeholder row; countdown pending row is used instead
 
+        // Step 0.5: preemptively stop settings-modal test stream if running
+        try { if (testActiveStream && testActiveStream.getTracks) testActiveStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
+        testActiveStream = null;
+
+        // Step 1: Acquire microphone stream with focused error handling
+        let stream = null;
         try {
-            // Defensive: fully release any prior mic tracks before requesting a new one
             stopCurrentStreamTracks();
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1, sampleRate: 48000 } });
+            stream = await getMicStreamWithFallback();
+        } catch (err) {
+            console.error('Frontend: Microphone acquisition failed:', err);
+            let msg = 'Error accessing microphone. Please ensure permissions are granted.';
+            try {
+                const name = err && (err.name || err.code) || '';
+                if (name === 'NotAllowedError' || name === 'PermissionDeniedError') msg = 'Microphone permission denied. Please allow access and try again.';
+                else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') msg = 'No microphone found. Please connect a mic and try again.';
+                else if (name === 'NotReadableError' || name === 'TrackStartError') msg = 'Microphone is in use by another application. Close other apps and retry.';
+                else if (name === 'OverconstrainedError') msg = 'Selected audio constraints are not supported by your device. Try a different input device.';
+                if (name) msg += `\n(${name})`;
+            } catch(_) {}
+            alert(msg);
+            startRecordingButton.disabled = false;
+            stopRecordingButton.disabled = true;
+            return;
+        }
+
+        try {
             // Prefer WebM Opus for widest browser support; fallback to OGG Opus
             const preferredTypes = [
                 'audio/webm;codecs=opus',
@@ -474,20 +523,30 @@ document.addEventListener('DOMContentLoaded', () => {
             try { await audioCtxInstance.audioWorklet.addModule('/static/audio/pcm-worklet.js'); } catch (e) { console.warn('Frontend: failed to add worklet, falling back', e); }
             if (audioCtxInstance.audioWorklet) {
             const source = audioCtxInstance.createMediaStreamSource(stream);
-                const workletNode = new AudioWorkletNode(audioCtxInstance, 'pcm16-worklet', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
-                workletNode.port.onmessage = ev => {
-                if (!enableGoogleSpeech || !socket || socket.readyState !== WebSocket.OPEN) return;
-                    const bytes = new Uint8Array(ev.data);
-                let bin = '';
-                const chunk = 0x8000;
-                for (let i = 0; i < bytes.length; i += chunk) {
-                    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                try {
+                    const workletNode = (typeof AudioWorkletNode !== 'undefined')
+                        ? new AudioWorkletNode(audioCtxInstance, 'pcm16-worklet', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 })
+                        : null;
+                    if (workletNode) {
+                        workletNode.port.onmessage = ev => {
+                            if (!enableGoogleSpeech || !socket || socket.readyState !== WebSocket.OPEN) return;
+                            const bytes = new Uint8Array(ev.data);
+                            let bin = '';
+                            const chunk = 0x8000;
+                            for (let i = 0; i < bytes.length; i += chunk) {
+                                bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                            }
+                            const b64 = btoa(bin);
+                            try { socket.send(JSON.stringify({ pcm16: b64 })); } catch (_) {}
+                        };
+                        source.connect(workletNode);
+                        workletNode.connect(audioCtxInstance.destination);
+                    } else {
+                        console.warn('Frontend: AudioWorkletNode not available; skipping PCM16 live capture.');
+                    }
+                } catch (e) {
+                    console.warn('Frontend: Failed to initialize AudioWorkletNode; skipping PCM16 live capture.', e);
                 }
-                const b64 = btoa(bin);
-                try { socket.send(JSON.stringify({ pcm16: b64 })); } catch (_) {}
-            };
-                source.connect(workletNode);
-                workletNode.connect(audioCtxInstance.destination);
             }
 
             // Ensure persistent WebSocket is open; reuse if already open/connecting
@@ -513,7 +572,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     // ensure default disabled state for stop when auto is off
                     stopTranscribeButton.disabled = true;
                 }
-                try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); } catch (e) { console.warn('Frontend: start on open failed:', e); }
+                try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); }
+                catch (e) {
+                    console.warn('Frontend: mediaRecorder.start failed:', e);
+                    alert(`Recording setup failed. Please try again.${e && (e.name || e.code) ? ` (${e.name || e.code})` : ''}`);
+                    try { if (currentStream && currentStream.getTracks) currentStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
+                    stopCurrentStreamTracks();
+                    startRecordingButton.disabled = false;
+                    stopRecordingButton.disabled = true;
+                    return;
+                }
                 startSegmentLoop();
                 // Ensure first pending row is created and subsequent cycles keep a visible countdown row
                 try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
@@ -833,8 +901,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentRecording = null; // Reset for next session (recordings array keeps history)
             };
         } catch (err) {
-            console.error('Frontend: Error accessing microphone or setting up MediaRecorder:', err);
-            alert('Error accessing microphone. Please ensure permissions are granted.');
+            console.error('Frontend: Recording setup failed:', err);
+            const name = err && (err.name || err.code) ? ` (${err.name || err.code})` : '';
+            alert(`Recording setup failed. Please try again.${name}`);
+            try { if (stream && stream.getTracks) stream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
+            try { stopCurrentStreamTracks(); } catch(_) {}
             startRecordingButton.disabled = false;
             stopRecordingButton.disabled = true;
         }
@@ -1160,6 +1231,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (testRecord2s) testRecord2s.addEventListener('click', async () => {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Store active test stream so main recorder can preemptively stop it
+                try { if (testActiveStream && testActiveStream.getTracks) testActiveStream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
+                testActiveStream = stream;
                 const rec = new MediaRecorder(stream);
                 const chunks = [];
                 rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
@@ -1169,6 +1243,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (testResults) testResults.textContent = 'Recorded 2s sample.';
                     // Ensure stream tracks are released to prevent lingering "mic in use"
                     try { stream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
+                    testActiveStream = null;
                 };
                 rec.start();
                 setTimeout(() => { try { rec.stop(); } catch(_) {} }, 2000);
