@@ -333,7 +333,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     async function scheduleSegmentTimeouts(recordId, idx) {
         try {
-            if (!segmentLoopActive) { console.log('Frontend: skip scheduling timeout (not active)', { recordId, idx }); return; }
+            const isActive = (!!segmentLoopActive) || (!!mediaRecorder && mediaRecorder.state === 'recording');
+            if (!isActive) { console.log('Frontend: skip scheduling timeout (not active)', { recordId, idx }); return; }
             const services = await getServicesCached();
             const enabled = services.filter(s => s.enabled);
             const TIMEOUT_MS = Number(segmentMs) && Number(segmentMs) >= 1000 ? Number(segmentMs) + 500 : 30000;
@@ -555,8 +556,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             // Seed segments array with a placeholder so transcript updates can target this row
                             try {
                                 while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
-                                const startMs = ts;
-                                const endMs = ts + (typeof segmentMs === 'number' ? segmentMs : 10000);
+                                const base = currentRecording.startTs || ts;
+                                const segDur = (typeof segmentMs === 'number' && segmentMs > 0) ? segmentMs : 10000;
+                                const startMs = base + (segIndex * segDur);
+                                const endMs = startMs + segDur;
                                 currentRecording.segments[segIndex] = { idx: segIndex, url: '', mime: segBlob.type || '', size: segBlob.size || 0, ts, startMs, endMs, clientId: ts };
                             } catch(_) {}
                             // Insert temp row immediately with client blob URL
@@ -569,10 +572,12 @@ document.addEventListener('DOMContentLoaded', () => {
                                 if (socket && socket.readyState === WebSocket.OPEN) {
                                     segBlob.arrayBuffer().then(buf => {
                                         const b64 = ab2b64(buf);
-                                        try { socket.send(JSON.stringify({ type: 'segment', audio: b64, id: ts, idx: segIndex, ts, mime: segBlob.type })); } catch(_) {}
+                                        try { socket.send(JSON.stringify({ type: 'segment', audio: b64, id: ts, idx: segIndex, ts, mime: segBlob.type, duration_ms: segmentMs })); } catch(_) {}
                                     }).catch(()=>{});
                                 }
                             } catch(_) {}
+                            // Schedule timeouts for this segment's provider cells
+                            try { scheduleSegmentTimeouts(currentRecording.id, segIndex); } catch(_) {}
                         } catch(_) {}
                     }
                 }
