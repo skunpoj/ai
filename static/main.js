@@ -103,6 +103,67 @@ document.addEventListener('DOMContentLoaded', () => {
     const segmentIdToIndex = new Map(); // key: `${recId}:${serverId}` -> idx
     const pendingCellUpdatesByServerId = new Map(); // key: `${recId}:${serverId}:${svc}`
     function getServerId(obj) { try { return obj && (obj.segment_id || obj.sid || obj.server_id || null); } catch(_) { return null; } }
+    // Insert-once strategy: wait until we have saved info AND at least one transcript
+    const pendingRowsByIdx = new Map(); // `${recId}:${idx}` -> { saved: {...}, transcripts: {svc:text}, inserted: bool }
+    const pendingRowsByClientId = new Map(); // `${recId}:${clientId}` -> partial same shape
+    const pendingRowsByServerId = new Map(); // `${recId}:${serverId}` -> partial same shape
+    const insertedRows = new Set(); // `${recId}:${idx}` rows already inserted
+    function idxKey(recId, idx){ return `${recId}:${idx}`; }
+    function clientKey(recId, clientId){ return `${recId}:${clientId}`; }
+    function serverKey(recId, serverId){ return `${recId}:${serverId}`; }
+    function mergePending(dst, src){ if (!src) return dst; dst.saved = dst.saved || src.saved || null; dst.transcripts = Object.assign({}, src.transcripts || {}, dst.transcripts || {}); dst.inserted = !!(dst.inserted || src.inserted); return dst; }
+    function setPending(map, key, updater){ const cur = map.get(key) || { saved: null, transcripts: {}, inserted: false }; const next = updater ? updater(cur) : cur; map.set(key, next); return next; }
+    function collectEnabledServicesSync(){ try { const services = window.__services_cache; if (Array.isArray(services)) return services.filter(s=>s && s.enabled).map(s=>s.key); } catch(_) {} return ['google','vertex','gemini','aws']; }
+    // Insert the row exactly once (idempotent). Requires saved info and at least one transcript
+    async function maybeInsertRowOnce(rec, segIndex){
+        const k = idxKey(rec.id, segIndex);
+        if (insertedRows.has(k)) return;
+        const p = pendingRowsByIdx.get(k);
+        if (!p || !p.saved) return;
+        const tx = p.transcripts || {};
+        const enabled = collectEnabledServicesSync();
+        const hasAnyTx = enabled.some(svc => typeof tx[svc] === 'string' && tx[svc].length);
+        if (!hasAnyTx) return;
+        const d = p.saved;
+        try {
+            await prependSegmentRow(rec, segIndex, d, d.startMs || d.ts || Date.now(), d.endMs || ((d.startMs || d.ts || Date.now()) + (typeof segmentMs === 'number' ? segmentMs : 10000)));
+        } catch(e) { console.log('Frontend: prependSegmentRow failed', e); }
+        try {
+            const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+            if (row) {
+                if (typeof d.id === 'number') row.setAttribute('data-client-id', String(d.id));
+                const sid = getServerId(d); if (sid) row.setAttribute('data-server-id', String(sid));
+                enabled.forEach(svc => {
+                    const text = tx[svc];
+                    if (typeof text === 'string' && text.length) {
+                        // Persist in arrays for consistency with existing logic
+                        try {
+                            const arr = (rec.transcripts[svc] = rec.transcripts[svc] || []);
+                            while (arr.length <= segIndex) arr.push('');
+                            arr[segIndex] = text;
+                        } catch(_) {}
+                        const td = row.querySelector(`td[data-svc="${svc}"]`);
+                        if (td) td.textContent = text;
+                        rec.fullAppend = rec.fullAppend || {}; const prev = rec.fullAppend[svc] || ''; rec.fullAppend[svc] = prev ? (prev + ' ' + text) : text;
+                        // Update full provider cell or trigger render if absent
+                        try {
+                            const fullCell = document.querySelector(`#fulltable-${rec.id} td[data-svc="${svc}"]`);
+                            if (fullCell) fullCell.textContent = rec.fullAppend[svc];
+                            else {
+                                const fullWrap = document.getElementById(`fulltable-${rec.id}`);
+                                if (fullWrap && typeof htmx !== 'undefined') htmx.ajax('POST', '/render/full_row', { target: fullWrap, values: { record: JSON.stringify(rec) }, swap: 'innerHTML' });
+                            }
+                        } catch(_) {}
+                    }
+                });
+            }
+        } catch(_) {}
+        try { scheduleSegmentTimeouts(rec.id, segIndex); } catch(_) {}
+        insertedRows.add(k);
+        // cleanup auxiliary maps for this segment
+        try { const sid = getServerId(p.saved); if (sid) pendingRowsByServerId.delete(serverKey(rec.id, sid)); } catch(_) {}
+        try { if (typeof p.saved.id === 'number') pendingRowsByClientId.delete(clientKey(rec.id, p.saved.id)); } catch(_) {}
+    }
     function findSegmentRowEl(recId, segIndex, clientId, serverId) {
         try {
             if (typeof segIndex === 'number' && segIndex >= 0) {
@@ -583,26 +644,6 @@ document.addEventListener('DOMContentLoaded', () => {
                                 const endMs = startMs + segDur;
                                 currentRecording.segments[segIndex] = { idx: segIndex, url: '', mime: segBlob.type || '', size: segBlob.size || 0, ts, startMs, endMs, clientId: ts };
                             } catch(_) {}
-                            // Insert temp row immediately with client blob URL
-                            try {
-                                const tempUrl = URL.createObjectURL(segBlob);
-                                insertTempSegmentRow(currentRecording, ts, tempUrl, segBlob.size, currentRecording.segments[segIndex].startMs, currentRecording.segments[segIndex].endMs);
-                                // Flush any queued transcript updates by clientId into the temp row immediately
-                                try {
-                                    const prefix = `${currentRecording.id}:${ts}:`;
-                                    for (const [k, txt] of pendingCellUpdatesByClientId.entries()) {
-                                        if (!k.startsWith(prefix)) continue;
-                                        const parts = k.split(':');
-                                        const svc = parts[2] || '';
-                                        const tempRow = document.getElementById(`segtemp-${currentRecording.id}-${ts}`);
-                                        if (tempRow) {
-                                            const td = tempRow.querySelector(`td[data-svc="${svc}"]`);
-                                            if (td && typeof txt === 'string') td.textContent = txt;
-                                            pendingCellUpdatesByClientId.delete(k);
-                                        }
-                                    }
-                                } catch(_) {}
-                            } catch(_) {}
                             // Upload to backend via WebSocket with client id and idx for server mapping
                             try {
                                 if (socket && socket.readyState === WebSocket.OPEN) {
@@ -612,8 +653,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     }).catch(()=>{});
                                 }
                             } catch(_) {}
-                            // Schedule timeouts for this segment's provider cells
-                            try { scheduleSegmentTimeouts(currentRecording.id, segIndex); } catch(_) {}
+                            // Defer any UI insertion until we have transcript(s)
                         } catch(_) {}
                     }
                 }
@@ -739,14 +779,62 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                             // Remove any temp row for this client timestamp
                             try { const temp = document.getElementById(`segtemp-${rec.id}-${data.id}`); if (temp && temp.parentElement) temp.parentElement.removeChild(temp); } catch(_) {}
-                            // Use shared helper to create the row immediately so playback appears in-session
-                            try { await prependSegmentRow(rec, segIndex, data, seededStart, seededEnd); } catch(e) { console.log('Frontend: prependSegmentRow failed', e); }
-                            // Annotate row with identifiers to help future lookups
+                            // Store saved info; defer insertion until transcript(s) arrive
                             try {
-                                const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
-                                if (row) {
-                                    if (typeof data.id === 'number') row.setAttribute('data-client-id', String(data.id));
-                                    if (serverId) row.setAttribute('data-server-id', String(serverId));
+                                const payload = { url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs: seededStart, endMs: seededEnd, id: data.id, segment_id: serverId };
+                                const K = idxKey(rec.id, segIndex);
+                                const base = setPending(pendingRowsByIdx, K, cur => { cur.saved = payload; return cur; });
+                                if (typeof data.id === 'number') setPending(pendingRowsByClientId, clientKey(rec.id, data.id), cur => mergePending(cur, base));
+                                if (serverId) setPending(pendingRowsByServerId, serverKey(rec.id, serverId), cur => mergePending(cur, base));
+                                // If server already included transcripts, store and try insert
+                                if (data.transcripts || data.tx) {
+                                    const tx = data.transcripts || data.tx || {};
+                                    const merged = setPending(pendingRowsByIdx, K, cur => { cur.transcripts = Object.assign({}, cur.transcripts || {}, tx); return cur; });
+                                    await maybeInsertRowOnce(rec, segIndex);
+                                }
+                                // Merge any transcripts that arrived earlier keyed by client/server id, then try insert
+                                try {
+                                    if (typeof data.id === 'number') {
+                                        const part = pendingRowsByClientId.get(clientKey(rec.id, data.id));
+                                        if (part) setPending(pendingRowsByIdx, K, cur => mergePending(cur, part));
+                                    }
+                                    if (serverId) {
+                                        const part2 = pendingRowsByServerId.get(serverKey(rec.id, serverId));
+                                        if (part2) setPending(pendingRowsByIdx, K, cur => mergePending(cur, part2));
+                                    }
+                                } catch(_) {}
+                                await maybeInsertRowOnce(rec, segIndex);
+                            } catch(_) {}
+                            // Prefer single-shot update: if server includes transcripts now, apply them all
+                            try {
+                                const tx = data.transcripts || data.tx || null;
+                                if (tx && typeof tx === 'object') {
+                                    const services = Object.keys(tx);
+                                    services.forEach(svc => {
+                                        const text = tx[svc];
+                                        if (typeof text !== 'string' || !text.length) return;
+                                        const arr = (rec.transcripts[svc] = rec.transcripts[svc] || []);
+                                        while (arr.length <= segIndex) arr.push('');
+                                        arr[segIndex] = text;
+                                        // Clear timeout for this provider
+                                        clearSvcTimeout(rec.id, segIndex, svc);
+                                        // Update segment cell
+                                        try {
+                                            const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                            if (row) {
+                                                const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                                if (td) td.textContent = text;
+                                            }
+                                        } catch(_) {}
+                                        // Append to full provider cell
+                                        rec.fullAppend = rec.fullAppend || {};
+                                        const prev = rec.fullAppend[svc] || '';
+                                        rec.fullAppend[svc] = prev ? (prev + ' ' + text) : text;
+                                        try {
+                                            const fullCell = document.querySelector(`#fulltable-${rec.id} td[data-svc="${svc}"]`);
+                                            if (fullCell) fullCell.textContent = rec.fullAppend[svc];
+                                        } catch(_) {}
+                                    });
                                 }
                             } catch(_) {}
                             // If a temp row still exists for this client id, merge queued clientId transcripts into the new row
@@ -781,9 +869,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     }
                                 }
                             } catch(_) {}
-                            // No countdown row in compat mode
-                            // Ensure timeout is scheduled for the row's cells
-                            try { await scheduleSegmentTimeouts(rec.id, segIndex); } catch(e) { console.log('Frontend: scheduleSegmentTimeouts failed', e); }
+                            // No countdown row in compat mode; scheduling deferred until insertion
                             // Flush any pending transcript updates queued before the row existed
                             try {
                                 const services = ['google','vertex','gemini','aws'];
@@ -883,7 +969,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                         } catch(_) {}
                     };
-                    const handleTranscript = (msg) => {
+                    const handleTranscript = async (msg) => {
                         try {
                             if (!msg.transcript && !msg.error) console.log(`[WS:${msg.type}] empty result`, msg);
                             if (msg.error) console.log(`[WS:${msg.type}] error`, msg.error);
@@ -904,59 +990,30 @@ document.addEventListener('DOMContentLoaded', () => {
                                     if (found) segIndex = found.idx;
                                 } catch(_) {}
                             }
-                            if (segIndex < 0) { console.log(`[WS:${msg.type}] missing idx/id, queueing by client id`, msg); }
+                            if (segIndex < 0) { console.log(`[WS:${msg.type}] missing idx/id, queueing by client/server id`, msg); }
                             try {
                                 let svc = (msg.type || '').replace('segment_transcript_', '') || '';
                                 if (!svc) svc = msg.svc || msg.provider || msg.service || '';
                                 if (svc) {
-                                    const arr = (rec.transcripts[svc] = rec.transcripts[svc] || []);
-                                    if (segIndex >= 0) {
-                                    while (arr.length <= segIndex) arr.push('');
-                                    if (typeof msg.transcript === 'string') arr[segIndex] = msg.transcript;
-                                    clearSvcTimeout(rec.id, segIndex, svc);
-                                    // Persist serverId on resolved segment for future lookups
-                                    try { if (serverId) { while (rec.segments.length <= segIndex) rec.segments.push(null); rec.segments[segIndex] = Object.assign({}, rec.segments[segIndex] || {}, { serverId, idx: segIndex }); segmentIdToIndex.set(`${rec.id}:${serverId}`, segIndex); } } catch(_) {}
-                                    }
-                                    // Append once per svc:segment and update full provider cell in-place
-                                    if (typeof msg.transcript === 'string' && msg.transcript.trim()) {
-                                        rec._appended = rec._appended || {};
-                                        const key = `${svc}:${segIndex >= 0 ? segIndex : msg.id}`;
-                                        if (!rec._appended[key]) {
-                                            rec.fullAppend = rec.fullAppend || {};
-                                            const prev = rec.fullAppend[svc] || '';
-                                            rec.fullAppend[svc] = prev ? (prev + ' ' + msg.transcript.trim()) : msg.transcript.trim();
-                                            rec._appended[key] = true;
-                                        }
-                                        // Update provider_table immediately (live append)
-                                        try {
-                                            const fullCell = document.querySelector(`#fulltable-${rec.id} td[data-svc="${svc}"]`);
-                                            if (fullCell) fullCell.textContent = rec.fullAppend[svc] || msg.transcript;
-                                            else {
-                                                const fullWrap = document.getElementById(`fulltable-${rec.id}`);
-                                                if (fullWrap) htmx.ajax('POST', '/render/full_row', { target: fullWrap, values: { record: JSON.stringify(rec) }, swap: 'innerHTML' });
-                                            }
-                                        } catch(_) {}
-                                    }
-                                    // Direct DOM update for segment cell (no HTMX swap)
-                                    try {
+                                    // Store transcript for insert-once; do not live-update cells pre-insert
+                                    if (typeof msg.transcript === 'string' && msg.transcript.length) {
                                         if (segIndex >= 0) {
-                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
-                                        if (row) {
-                                            const td = row.querySelector(`td[data-svc="${svc}"]`);
-                                            if (td && typeof msg.transcript === 'string') td.textContent = msg.transcript;
-                                        } else if (typeof msg.transcript === 'string') {
-                                            pendingCellUpdates.set(`${rec.id}:${segIndex}:${svc}`, msg.transcript);
-                                            }
-                                        } else if (typeof msg.transcript === 'string') {
-                                            if (typeof msg.id === 'number') pendingCellUpdatesByClientId.set(`${rec.id}:${msg.id}:${svc}`, msg.transcript);
-                                            if (serverId) pendingCellUpdatesByServerId.set(`${rec.id}:${serverId}:${svc}`, msg.transcript);
+                                            const K = idxKey(rec.id, segIndex);
+                                            setPending(pendingRowsByIdx, K, cur => { cur.transcripts = Object.assign({}, cur.transcripts || {}, { [svc]: msg.transcript }); return cur; });
+                                            // Persist mapping
+                                            try { if (serverId) segmentIdToIndex.set(`${rec.id}:${serverId}`, segIndex); } catch(_) {}
+                                            // Attempt insertion now that we have a transcript
+                                            await maybeInsertRowOnce(rec, segIndex);
+                                        } else {
+                                            if (typeof msg.id === 'number') setPending(pendingRowsByClientId, clientKey(rec.id, msg.id), cur => { cur.transcripts = Object.assign({}, cur.transcripts || {}, { [svc]: msg.transcript }); return cur; });
+                                            if (serverId) setPending(pendingRowsByServerId, serverKey(rec.id, serverId), cur => { cur.transcripts = Object.assign({}, cur.transcripts || {}, { [svc]: msg.transcript }); return cur; });
                                         }
-                                    } catch(_) {}
+                                    }
                                 }
                             } catch(e) { console.log('Frontend: handleTranscript update failed', e); }
-                        } catch(_) {}
+                                        } catch(_) {}
                     };
-                    const handleSegmentAck = (msg) => {
+                    const handleSegmentAck = async (msg) => {
                         try {
                             const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || null);
                             if (!rec) return;
@@ -973,44 +1030,18 @@ document.addEventListener('DOMContentLoaded', () => {
                             const seeded = rec.segments[segIndex] || {};
                             rec.segments[segIndex] = Object.assign({}, seeded, { idx: segIndex, clientId: (typeof msg.id === 'number' ? msg.id : seeded.clientId), serverId });
                             if (serverId) segmentIdToIndex.set(`${rec.id}:${serverId}`, segIndex);
-                            // Update any existing row (temp or real) with serverId attribute
+                            // Merge any pending transcript/save parts onto idx key now
                             try {
-                                const row = document.getElementById(`segrow-${rec.id}-${segIndex}`) || document.getElementById(`segtemp-${rec.id}-${msg.id}`);
-                                if (row && serverId) row.setAttribute('data-server-id', String(serverId));
-                            } catch(_) {}
-                            // Flush queued transcripts by clientId/serverId now that idx is known
-                            try {
-                                const services = ['google','vertex','gemini','aws'];
-                                for (const svc of services) {
-                                    const k1 = `${rec.id}:${segIndex}:${svc}`;
-                                    if (pendingCellUpdates.has(k1)) {
-                                        const txt = pendingCellUpdates.get(k1);
-                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
-                                        if (row) { const td = row.querySelector(`td[data-svc="${svc}"]`); if (td) td.textContent = txt; }
-                                        pendingCellUpdates.delete(k1);
-                                    }
-                                    if (typeof msg.id === 'number') {
-                                        const k2 = `${rec.id}:${msg.id}:${svc}`;
-                                        if (pendingCellUpdatesByClientId.has(k2)) {
-                                            const txt2 = pendingCellUpdatesByClientId.get(k2);
-                                            const row2 = document.getElementById(`segrow-${rec.id}-${segIndex}`);
-                                            if (row2) { const td2 = row2.querySelector(`td[data-svc="${svc}"]`); if (td2) td2.textContent = txt2; }
-                                            pendingCellUpdatesByClientId.delete(k2);
-                                        }
-                                    }
-                                    if (serverId) {
-                                        const k3 = `${rec.id}:${serverId}:${svc}`;
-                                        if (pendingCellUpdatesByServerId.has(k3)) {
-                                            const txt3 = pendingCellUpdatesByServerId.get(k3);
-                                            const row3 = document.getElementById(`segrow-${rec.id}-${segIndex}`);
-                                            if (row3) { const td3 = row3.querySelector(`td[data-svc="${svc}"]`); if (td3) td3.textContent = txt3; }
-                                            pendingCellUpdatesByServerId.delete(k3);
-                                        }
-                                    }
+                                if (typeof msg.id === 'number') {
+                                    const part = pendingRowsByClientId.get(clientKey(rec.id, msg.id));
+                                    if (part) setPending(pendingRowsByIdx, idxKey(rec.id, segIndex), cur => mergePending(cur, part));
                                 }
+                                if (serverId) {
+                                    const part2 = pendingRowsByServerId.get(serverKey(rec.id, serverId));
+                                    if (part2) setPending(pendingRowsByIdx, idxKey(rec.id, segIndex), cur => mergePending(cur, part2));
+                                }
+                                await maybeInsertRowOnce(rec, segIndex);
                             } catch(_) {}
-                            // Ensure timeouts for this row
-                            try { scheduleSegmentTimeouts(rec.id, segIndex); } catch(_) {}
                         } catch(_) {}
                     };
                     socket.addEventListener('message', (ev) => {
@@ -1018,6 +1049,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             const msg = JSON.parse(ev.data);
                             if (!msg || !msg.type) return;
                             if (msg.type === 'segment_ack') return handleSegmentAck(msg);
+                            if (msg.type === 'segment_row') return handleSegmentSaved(msg);
                             if (msg.type === 'segment_saved') return handleSegmentSaved(msg);
                             if (msg.type === 'saved') return handleSaved(msg);
                             if (msg.type.startsWith('segment_transcript')) return handleTranscript(msg);
