@@ -476,7 +476,8 @@ document.addEventListener('DOMContentLoaded', () => {
             segments: [],
             transcripts: { google: [], googleLive: [], vertex: [], gemini: [] },
             fullAppend: { googleLive: '', google: '', vertex: '', gemini: '' },
-            timeouts: { google: [], vertex: [], gemini: [], aws: [] }
+            timeouts: { google: [], vertex: [], gemini: [], aws: [] },
+            _compatIdx: -1
         };
         recordings.push(currentRecording);
         lastRecordingId = currentRecording.id;
@@ -548,24 +549,30 @@ document.addEventListener('DOMContentLoaded', () => {
                         try {
                             const segBlob = e.data;
                             const ts = Date.now();
+                            // Derive a 0-based segment index for stable ordering
+                            try { currentRecording._compatIdx = (typeof currentRecording._compatIdx === 'number') ? (currentRecording._compatIdx + 1) : 0; } catch(_) { currentRecording._compatIdx = 0; }
+                            const segIndex = currentRecording._compatIdx;
+                            // Seed segments array with a placeholder so transcript updates can target this row
+                            try {
+                                while (currentRecording.segments.length <= segIndex) currentRecording.segments.push(null);
+                                const startMs = ts;
+                                const endMs = ts + (typeof segmentMs === 'number' ? segmentMs : 10000);
+                                currentRecording.segments[segIndex] = { idx: segIndex, url: '', mime: segBlob.type || '', size: segBlob.size || 0, ts, startMs, endMs, clientId: ts };
+                            } catch(_) {}
                             // Insert temp row immediately with client blob URL
                             try {
                                 const tempUrl = URL.createObjectURL(segBlob);
-                                const startMs = ts;
-                                const endMs = ts + (typeof segmentMs === 'number' ? segmentMs : 10000);
-                                insertTempSegmentRow(currentRecording, ts, tempUrl, segBlob.size, startMs, endMs);
+                                insertTempSegmentRow(currentRecording, ts, tempUrl, segBlob.size, currentRecording.segments[segIndex].startMs, currentRecording.segments[segIndex].endMs);
                             } catch(_) {}
-                            // Upload to backend via WebSocket
+                            // Upload to backend via WebSocket with client id and idx for server mapping
                             try {
                                 if (socket && socket.readyState === WebSocket.OPEN) {
                                     segBlob.arrayBuffer().then(buf => {
                                         const b64 = ab2b64(buf);
-                                        try { socket.send(JSON.stringify({ type: 'segment', audio: b64, id: ts, ts, mime: segBlob.type })); } catch(_) {}
+                                        try { socket.send(JSON.stringify({ type: 'segment', audio: b64, id: ts, idx: segIndex, ts, mime: segBlob.type })); } catch(_) {}
                                     }).catch(()=>{});
                                 }
                             } catch(_) {}
-                            // Start/refresh countdown for next window
-                            try { showPendingCountdown(currentRecording.id, segmentMs, () => (!!mediaRecorder && mediaRecorder.state === 'recording'), () => (!!mediaRecorder && mediaRecorder.state === 'recording')); } catch(_) {}
                         } catch(_) {}
                     }
                 }
@@ -636,7 +643,20 @@ document.addEventListener('DOMContentLoaded', () => {
                         stopRecordingButton.disabled = true;
                         return;
                     }
-                    try { showPendingCountdown(currentRecording.id, segmentMs, () => (!!mediaRecorder && mediaRecorder.state === 'recording'), () => (!!mediaRecorder && mediaRecorder.state === 'recording')); } catch(_) {}
+                    // Remove countdown usage in compat mode; show a running clock next to the active tab
+                    try {
+                        const tabBtn = document.getElementById(`tab-${currentRecording.id}`);
+                        if (tabBtn) {
+                            const start = Date.now();
+                            if (window.__recClockRaf) cancelAnimationFrame(window.__recClockRaf);
+                            const tick = () => {
+                                const elapsed = Math.max(0, Math.round((Date.now() - start)/1000));
+                                tabBtn.textContent = `${new Date(currentRecording.startTs).toLocaleTimeString()} (+${elapsed}s)`;
+                                window.__recClockRaf = requestAnimationFrame(tick);
+                            };
+                            window.__recClockRaf = requestAnimationFrame(tick);
+                        }
+                    } catch(_) {}
                 } else {
                     try { mediaRecorder.start(); console.log('Frontend: Full recorder started (continuous).'); }
                     catch (e) {
@@ -667,8 +687,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             try { const temp = document.getElementById(`segtemp-${rec.id}-${data.id}`); if (temp && temp.parentElement) temp.parentElement.removeChild(temp); } catch(_) {}
                             // Use shared helper to create the row immediately so playback appears in-session
                             try { await prependSegmentRow(rec, segIndex, data, startMs, endMs); } catch(e) { console.log('Frontend: prependSegmentRow failed', e); }
-                            // Re-create a fresh countdown row for the next segment window
-                            try { showPendingCountdown(rec.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
+                            // No countdown row in compat mode
                             // Ensure timeout is scheduled for the row's cells
                             try { await scheduleSegmentTimeouts(rec.id, segIndex); } catch(e) { console.log('Frontend: scheduleSegmentTimeouts failed', e); }
                             // Flush any pending transcript updates queued before the row existed
@@ -958,8 +977,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             const playerHtml = `<audio controls><source src="${audioUrl}" type="${mime}"></audio>`;
                             const dlHtml = `<a href="${audioUrl}" download title="Download" style="cursor:pointer;text-decoration:none">📥</a>`;
                             tr.firstChild.innerHTML = `${playerHtml} ${dlHtml}${sizeHtml}`;
-                            // Remove any existing countdown row now that recording stopped
-                            try { const pending = document.getElementById(`segpending-${currentRecording.id}`); if (pending && pending.parentElement) pending.parentElement.removeChild(pending); } catch(_) {}
+                            // Stop the running clock on stop
+                            try { if (window.__recClockRaf) cancelAnimationFrame(window.__recClockRaf); } catch(_) {}
                         }
                         // Update tab button with compact start->end (duration)
                         try {
