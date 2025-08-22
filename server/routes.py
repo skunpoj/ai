@@ -54,7 +54,7 @@ hr { display:none; }
                 Input(type="checkbox", id="toggleSegMetaToolbar", checked=True),
                 Label("Download", _for="toggleSegMetaToolbar"),
                 Input(type="checkbox", id="toggleTimeColToolbar", checked=True),
-                Label("Time Range", _for="toggleTimeColToolbar"),
+                Label("Time", _for="toggleTimeColToolbar", checked=True),
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
             ),
