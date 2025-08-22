@@ -69,7 +69,28 @@ export async function renderRecordingPanel(record) {
 
   panel.innerHTML = `
     <div>
-      
+      <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
+        <tbody>
+          <tr>
+            <td style="padding:0"></td>
+            <td style="padding:0"></td>
+            <td style="padding:0"></td>
+            <td style="padding:0"><div id="recordhdr-${record.id}" style="margin-bottom:8px">${startedAt && endedAt ? `Start: ${startedAt} · End: ${endedAt} · Duration: ${dur}s` : ''}</div></td>
+          </tr>
+        </tbody>
+      </table>
+      <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
+        <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
+          <thead>
+            <tr>
+              ${services.map(s => `<th style="border:0">${s.label}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>${fullCells}</tr>
+          </tbody>
+        </table>
+      </div>
     </div>
     <div style="margin-top:12px">
       <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">

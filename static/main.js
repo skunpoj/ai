@@ -627,22 +627,15 @@ document.addEventListener('DOMContentLoaded', () => {
                                             rec.fullAppend[svc] = prev ? (prev + ' ' + msg.transcript.trim()) : msg.transcript.trim();
                                             rec._appended[key] = true;
                                         }
-                                        const fullCell = document.querySelector(`#fulltable-${rec.id} td[data-svc="${svc}"]`);
-                                        if (fullCell) {
-                                            const hasDownloadChild = !!fullCell.querySelector('[data-load-full]');
-                                            if (hasDownloadChild) {
-                                                let span = fullCell.querySelector('span.full-text');
-                                                if (!span) {
-                                                    span = document.createElement('span');
-                                                    span.className = 'full-text';
-                                                    if (fullCell.childNodes && fullCell.childNodes.length > 0) fullCell.appendChild(document.createTextNode(' '));
-                                                    fullCell.appendChild(span);
-                                                }
-                                                span.textContent = rec.fullAppend[svc] || msg.transcript;
-                                            } else {
-                                                fullCell.textContent = rec.fullAppend[svc] || msg.transcript;
+                                        // Update provider_table immediately (live append)
+                                        try {
+                                            const fullCell = document.querySelector(`#fulltable-${rec.id} td[data-svc="${svc}"]`);
+                                            if (fullCell) fullCell.textContent = rec.fullAppend[svc] || msg.transcript;
+                                            else {
+                                                const fullWrap = document.getElementById(`fulltable-${rec.id}`);
+                                                if (fullWrap) htmx.ajax('POST', '/render/full_row', { target: fullWrap, values: { record: JSON.stringify(rec) }, swap: 'innerHTML' });
                                             }
-                                        }
+                                        } catch(_) {}
                                     }
                                     // Direct DOM update for segment cell
                                     const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
@@ -782,12 +775,12 @@ document.addEventListener('DOMContentLoaded', () => {
                             const dlHtml = `<a href="${audioUrl}" download title="Download" style="cursor:pointer;text-decoration:none">📥</a>`;
                             fullCell.innerHTML = `${playerHtml} ${dlHtml}${sizeHtml}`;
                         }
-                        const fullTime = document.getElementById(`fulltime-${currentRecording.id}`);
-                        if (fullTime) {
+                        const hdr = document.getElementById(`recordhdr-${currentRecording.id}`);
+                        if (hdr) {
                             const startStr = new Date(currentRecording.startTs).toLocaleTimeString();
                             const endStr = new Date(currentRecording.stopTs).toLocaleTimeString();
                             const durS = Math.max(0, Math.round((currentRecording.durationMs || 0)/1000));
-                            fullTime.textContent = `Start: ${startStr} · End: ${endStr} · Duration: ${durS}s`;
+                            hdr.textContent = `Start: ${startStr} · End: ${endStr} · Duration: ${durS}s`;
                         }
                     } catch(_) {}
                 }
@@ -934,21 +927,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!panelEl) return;
         // Use client renderer for initial structure to avoid 400 during early recording
         try { await renderPanel(record); } catch (_) {}
-        // After panel render, trigger initial full and rows refresh via server
+        // After panel render, trigger initial provider table refresh only (segment rows stay client-owned to avoid flicker)
         setTimeout(() => {
             const fullEl = document.getElementById(`fulltable-${record.id}`);
             if (fullEl) htmx.ajax('POST', '/render/full_row', { target: fullEl, values: { record: JSON.stringify(record) }, swap: 'innerHTML' });
-            const maxSeg = Math.max(
-                record.segments.length,
-                record.transcripts.google.length,
-                record.transcripts.vertex.length,
-                record.transcripts.gemini.length,
-                (record.transcripts.aws || []).length
-            );
-            for (let i = 0; i < maxSeg; i++) {
-                const row = document.getElementById(`segrow-${record.id}-${i}`);
-                if (row) htmx.ajax('POST', '/render/segment_row', { target: row, values: { record: JSON.stringify(record), idx: i }, swap: 'outerHTML' });
-            }
         }, 0);
     }
 

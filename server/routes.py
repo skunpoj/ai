@@ -52,9 +52,9 @@ hr { display:none; }
                 Input(type="checkbox", id="autoTranscribeToggle", checked=True),
                 Label("Auto Transcribe", _for="autoTranscribeToggle"),
                 Input(type="checkbox", id="toggleSegMetaToolbar", checked=True),
-                Label("Show segment download & size", _for="toggleSegMetaToolbar"),
+                Label("file size", _for="toggleSegMetaToolbar"),
                 Input(type="checkbox", id="toggleTimeColToolbar", checked=True),
-                Label("Show Time column", _for="toggleTimeColToolbar"),
+                Label("Time elapsed", _for="toggleTimeColToolbar"),
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
             ),
@@ -142,12 +142,6 @@ def build_panel_html(record: Dict[str, Any]) -> str:
                 Td("", style="padding:0"),
                 Td("", style="padding:0"),
                 Td(hdr, style="padding:0")
-            ),
-            Tr(
-                Td("", style="padding:0"),
-                Td("", style="padding:0"),
-                Td("", style="padding:0"),
-                Td(player_div, style="padding:0")
             ),
         ),
         border="0",
@@ -348,35 +342,11 @@ def render_full_row(req) -> Any:
     try:
         services = [s for s in services_json() if s.get("enabled")]
         full_header = Tr(*[Th(s["label"]) for s in services])
-        # Build first column with download icon + size when available
-        first_cell_bits: List[Any] = []
-        try:
-            if record.get("serverUrl"):
-                human = ""
-                size = int(record.get("serverSizeBytes") or 0)
-                if size >= 1048576:
-                    human = f"({round(size/1048576,1)} MB)"
-                elif size >= 1024:
-                    human = f"({int(round(size/1024))} KB)"
-                elif size > 0:
-                    human = f"({size} B)"
-                first_cell_bits = [A("📥", href=record.get("serverUrl"), download=True, title="Download", **{"data-load-full": record.get("serverUrl")}, style="cursor:pointer;text-decoration:none"), Space(" "), Small(human, **{"data-load-full": record.get("serverUrl")}, style="cursor:pointer")]
-        except Exception:
-            first_cell_bits = []
+        # Provider table shows only provider texts; player/icon/size belong in segments top row on stop
         full_cells: List[Any] = []
         for s in services:
             val = ((record.get("fullAppend", {}) or {}).get(s["key"], ""))
-            if not full_cells and first_cell_bits:
-                # Include download/size plus full text, so updates are visible without client-side patching
-                bits: List[Any] = list(first_cell_bits)
-                if val:
-                    try:
-                        bits += [Space(" "), Span(val, cls="full-text")]
-                    except Exception:
-                        bits += [Space(" "), val]
-                full_cells.append(Td(*bits, data_svc=s["key"]))
-            else:
-                full_cells.append(Td(val, data_svc=s["key"]))
+            full_cells.append(Td(val, data_svc=s["key"]))
         full_row = Tr(*full_cells, id=f"fullrow-{record.get('id','')}")
         table = Table(THead(full_header), TBody(full_row), border="0", cellpadding="4", cellspacing="0", style="border-collapse:collapse; border:0; width:100%")
         html = str(table)
