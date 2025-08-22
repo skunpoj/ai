@@ -1,10 +1,17 @@
-// Segment UI helpers: pending countdown row and top-prepend segment rows
+// Segment UI helpers
+// - showPendingCountdown: Displays a single, gapless countdown row per record
+//   Uses a single requestAnimationFrame loop keyed by recordId to avoid flicker
+//   and dynamically syncs the colspan with the table header.
+// - prependSegmentRow: Creates a stable, client-owned row for a saved segment.
+// - insertTempSegmentRow: Inserts a temporary row as soon as a segment stops
+//   (before server confirmation) so playback is visible immediately. It tags
+//   the row with data-temp-url so the caller can revoke the blob URL later.
 import { getServicesCached } from '/static/ui/services.js';
 
 export function showPendingCountdown(recordId, segmentMs, isActiveFn, isRecordingFn) {
   try {
     // Ensure only one countdown loop per recordId
-    window.__segCountdown = window.__segCountdown || { rafs: new Map(), cancels: new Map() };
+    window.__segCountdown = window.__segCountdown || { rafs: new Map(), lastStart: new Map() };
     const ensureReady = (attempts = 0) => {
       const tbody = document.getElementById(`segtbody-${recordId}`);
       if (!tbody) {
@@ -25,6 +32,7 @@ export function showPendingCountdown(recordId, segmentMs, isActiveFn, isRecordin
         tbody.insertBefore(tr, tbody.firstChild);
       }
       const start = Date.now();
+      window.__segCountdown.lastStart.set(recordId, start);
       // Cancel any existing RAF loop for this recordId
       try {
         const prev = window.__segCountdown.rafs.get(recordId);
@@ -36,7 +44,17 @@ export function showPendingCountdown(recordId, segmentMs, isActiveFn, isRecordin
         const elapsed = Date.now() - start;
         const remaining = Math.max(0, Math.ceil((segmentMs - elapsed) / 1000));
         const firstCell = node.firstChild;
-        if (firstCell) firstCell.textContent = `Recording for ${remaining} seconds...`;
+        if (firstCell) {
+          // Keep colspan in sync with current header
+          try {
+            const segTable = document.getElementById(`segtable-${recordId}`);
+            if (segTable) {
+              const cols = Math.max(1, segTable.querySelectorAll('thead th').length);
+              if (firstCell.getAttribute('colspan') !== String(cols)) firstCell.setAttribute('colspan', String(cols));
+            }
+          } catch(_) {}
+          firstCell.textContent = `Recording for ${remaining} seconds...`;
+        }
         if (elapsed < segmentMs && isRecordingFn()) {
           const id = requestAnimationFrame(tick);
           window.__segCountdown.rafs.set(recordId, id);
@@ -50,6 +68,8 @@ export function showPendingCountdown(recordId, segmentMs, isActiveFn, isRecordin
 }
 
 export async function prependSegmentRow(record, segIndex, data, startMs, endMs) {
+  // Creates a durable segment row (no HTMX swaps during recording). Transcript
+  // cells are updated in-place as provider results arrive.
   const tbody = document.getElementById(`segtbody-${record.id}`);
   if (!tbody) return null;
   const rowId = `segrow-${record.id}-${segIndex}`;
@@ -85,8 +105,6 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
       tr.appendChild(td);
     });
   } catch(_) {}
-  const pending = document.getElementById(`segpending-${record.id}`);
-  if (pending) { try { tbody.removeChild(pending); } catch(_) {} }
   tbody.insertBefore(tr, tbody.firstChild);
   return tr;
 }
@@ -99,6 +117,8 @@ export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs
     if (document.getElementById(tempId)) return document.getElementById(tempId);
     const tr = document.createElement('tr');
     tr.id = tempId;
+    // Tag so caller can revoke object URL once server row replaces this temp row
+    if (url) try { tr.setAttribute('data-temp-url', url); } catch(_) {}
     tr.setAttribute('data-client-ts', String(clientTs));
     const audioCell = document.createElement('td');
     audioCell.style.padding = '0';
