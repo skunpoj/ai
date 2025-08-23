@@ -67,10 +67,10 @@ def build_settings_modal() -> Any:
                     type="text",
                     id="geminiApiKey",
                     placeholder=(app_state.gemini_api_key_masked or "Enter Gemini API Key"),
-                    style="width:100%"
+                    style="width:100%;height:28px"
                 ),
-                # Make Apply smaller/shorter
-                Button("Apply", id="useGeminiKey", style="padding:4px 10px;font-size:12px"),
+                # Match height with input; compact padding
+                Button("Apply", id="useGeminiKey", style="height:28px;padding:0 10px;font-size:12px"),
                 style="margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:8px"
             ),
             Hr(),

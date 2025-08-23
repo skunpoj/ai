@@ -16,6 +16,7 @@ from server.services.google_stt import recognize_segment as recognize_google_seg
 from server.services.vertex_gemini import build_vertex_contents, extract_text_from_vertex_response
 from server.services.vertex_langchain import is_available as lc_vertex_available, transcribe_segment_via_langchain
 from server.services.gemini_api import extract_text_from_gemini_response
+from google import genai as genai_api
 from server.services.registry import is_enabled as service_enabled
 from server.services import aws_transcribe
 from server.sse_bus import publish as sse_publish
@@ -250,19 +251,41 @@ async def ws_handler(websocket: WebSocket) -> None:
                                     print(f"WS error vertex segment: {e}")
                             asyncio.create_task(do_vertex(segment_index, seg_bytes, seg_ext))
                         # Dispatch Gemini API per-segment if available
-                        if transcribe_enabled and service_enabled("gemini") and app_state.gemini_model is not None:
+                        if transcribe_enabled and service_enabled("gemini"):
                             print(f"WS dispatch: gemini idx={segment_index} ext={seg_ext} bytes={len(seg_bytes)}")
                             async def do_gemini(idx: int, b: bytes, ext: str):
                                 try:
                                     order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
                                     resp = None
                                     last_exc = None
+                                    # Prefer API-key client per gemini.py to avoid SSL issues
+                                    # Mirror gemini.py exactly: API-key client, fixed model default
+                                    api_key = os.environ.get("GEMINI_API_KEY") or ""
+                                    client = None
+                                    if api_key:
+                                        try:
+                                            client = genai_api.Client(api_key=api_key)
+                                        except Exception as ce:
+                                            last_exc = ce
+                                            client = None
                                     for mt in order:
                                         try:
-                                            resp = app_state.gemini_model.generate_content([
-                                                {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
-                                                {"mime_type": mt, "data": b}
-                                            ])
+                                            if client is not None:
+                                                resp = client.models.generate_content(
+                                                    model=(getattr(app_state, 'gemini_model_name', None) or "gemini-2.5-flash"),
+                                                    contents=[
+                                                        {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
+                                                        {"mime_type": mt, "data": b}
+                                                    ]
+                                                )
+                                            else:
+                                                # Fallback to any pre-initialized model client
+                                                if getattr(app_state, 'gemini_model', None) is None:
+                                                    raise RuntimeError("Gemini client not configured")
+                                                resp = app_state.gemini_model.generate_content([
+                                                    {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
+                                                    {"mime_type": mt, "data": b}
+                                                ])
                                             break
                                         except Exception as ie:
                                             last_exc = ie
