@@ -239,8 +239,10 @@ async def sse_events() -> Any:
 async def test_transcribe(audio_b64: str = "", mime: str = "", services: str = "") -> Any:
     from starlette.responses import JSONResponse
     try:
+        print(f"HTTP /test_transcribe: mime={mime} services={services}")
         raw = _b64_to_bytes(audio_b64)
         if not raw:
+            print("HTTP /test_transcribe: no_audio")
             return JSONResponse({"ok": False, "error": "no_audio"})
         # very small helper to invoke enabled providers synchronously for a short clip
         results = {}
@@ -256,12 +258,15 @@ async def test_transcribe(audio_b64: str = "", mime: str = "", services: str = "
             # Google
             if ((not requested) or ("google" in requested)) and svc_enabled("google") and app_state.speech_client is not None:
                 try:
+                    print("HTTP /test_transcribe: calling Google")
                     results["google"] = await recognize_google_segment(app_state.speech_client, raw, ("ogg" if "ogg" in (mime or "").lower() else "webm"))
+                    print(f"HTTP /test_transcribe: Google text_len={len(results['google'] or '')}")
                 except Exception as e:
                     results["google_error"] = str(e)
             # Vertex
             if ((not requested) or ("vertex" in requested)) and svc_enabled("vertex") and app_state.vertex_client is not None:
                 try:
+                    print("HTTP /test_transcribe: calling Vertex")
                     order = ["audio/ogg", "audio/webm"] if ("ogg" in (mime or "").lower()) else ["audio/webm", "audio/ogg"]
                     text = ""
                     if lc_vertex_available():
@@ -281,11 +286,13 @@ async def test_transcribe(audio_b64: str = "", mime: str = "", services: str = "
                         if resp is None and last_exc: raise last_exc
                         text = extract_text_from_vertex_response(resp)
                     results["vertex"] = text
+                    print(f"HTTP /test_transcribe: Vertex text_len={len(text or '')}")
                 except Exception as e:
                     results["vertex_error"] = str(e)
             # Gemini API
             if ((not requested) or ("gemini" in requested)) and svc_enabled("gemini") and app_state.gemini_model is not None:
                 try:
+                    print("HTTP /test_transcribe: calling Gemini API")
                     order = ["audio/ogg", "audio/webm"] if ("ogg" in (mime or "").lower()) else ["audio/webm", "audio/ogg"]
                     resp = None
                     last_exc = None
@@ -297,14 +304,17 @@ async def test_transcribe(audio_b64: str = "", mime: str = "", services: str = "
                             ])
                             break
                         except Exception as ie:
+                            print(f"HTTP /test_transcribe: Gemini failed mt={mt}: {ie}")
                             last_exc = ie
                             continue
                     if resp is None and last_exc: raise last_exc
                     results["gemini"] = extract_text_from_gemini_response(resp)
+                    print(f"HTTP /test_transcribe: Gemini text_len={len(results['gemini'] or '')}")
                 except Exception as e:
                     results["gemini_error"] = str(e)
         except Exception as e:
             return JSONResponse({"ok": False, "error": f"server_error: {e}"})
+        print(f"HTTP /test_transcribe: results_keys={list(results.keys())}")
         return JSONResponse({"ok": True, "results": results})
     except Exception as e:
         from starlette.responses import JSONResponse

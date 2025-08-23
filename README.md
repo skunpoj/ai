@@ -227,7 +227,17 @@ If you want linting/formatting, add the following files and run with npm:
 2. Frontend:
    - No change needed for columns; the UI reads `/services` and renders accordingly.
 
-### Vertex AI Gemini with Service Accounts (Optional, Parallel Transcription)
+### Gemini Providers
+
+Gemini API (API key)
+
+- Set `GEMINI_API_KEY` to enable the consumer Gemini API client via `google.genai`.
+- The server prefers the API-key client when present and calls:
+  - `genai.Client(api_key=GEMINI_API_KEY)`
+  - `client.models.generate_content(model='gemini-2.5-flash', contents=[Part.from_text(...), Part.from_bytes(...)])`
+- This path avoids local SSL trust issues seen with some environments, since it uses the official SDK and a CA bundle managed by the runtime.
+
+Vertex AI Gemini (Service account JSON)
 
 To run Gemini using your service account (no API key), enable the Vertex AI SDK mode:
 
@@ -247,6 +257,12 @@ To run Gemini using your service account (no API key), enable the Vertex AI SDK 
      ```
 
 With these set, the backend will use Vertex AI Gemini via the Google GenAI SDK. LangChain is also supported via `langchain-google-vertexai` where applicable, but audio transcription currently goes through the SDK's `models.generate_content` path for reliability.
+
+Provider selection logic
+
+- If `GEMINI_API_KEY` is set: use Gemini API (consumer) for the `gemini` provider column.
+- If API key is not set but Vertex client is initialized: use Vertex AI Gemini with service account.
+- Both can run in parallel with Google STT; columns are controlled via Settings → Providers.
 
 ### UI behavior (Segments)
 
