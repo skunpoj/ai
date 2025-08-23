@@ -7,7 +7,7 @@ import queue
 import time
 from typing import Optional
 
-from starlette.websockets import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 from google.cloud import speech
 
 from server.state import app_state
@@ -49,10 +49,19 @@ async def ws_handler(websocket: WebSocket) -> None:
         try:
             transcribe_enabled = False
             while True:
+                # Stop reading if client has disconnected
+                try:
+                    if websocket.application_state == WebSocketState.DISCONNECTED or websocket.client_state == WebSocketState.DISCONNECTED:
+                        break
+                except Exception:
+                    pass
                 try:
                     message = await websocket.receive_json()
                     mtype = message.get("type") if isinstance(message, dict) else None
                 except WebSocketDisconnect:
+                    break
+                except RuntimeError:
+                    # Starlette raises if receive() is called after disconnect
                     break
                 except Exception as e:
                     print(f"WS error receive_json: {e}")
@@ -250,45 +259,25 @@ async def ws_handler(websocket: WebSocket) -> None:
                                 except Exception as e:
                                     print(f"WS error vertex segment: {e}")
                             asyncio.create_task(do_vertex(segment_index, seg_bytes, seg_ext))
-                        # Dispatch Gemini API per-segment if available
-                        if transcribe_enabled and service_enabled("gemini"):
+                        # Dispatch Gemini API per-segment if available (mirror /test_transcribe method)
+                        if transcribe_enabled and service_enabled("gemini") and getattr(app_state, 'gemini_model', None) is not None:
                             print(f"WS dispatch: gemini idx={segment_index} ext={seg_ext} bytes={len(seg_bytes)}")
                             async def do_gemini(idx: int, b: bytes, ext: str):
                                 try:
                                     order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
                                     resp = None
                                     last_exc = None
-                                    # Prefer API-key client per gemini.py to avoid SSL issues
-                                    # Mirror gemini.py exactly: API-key client, fixed model default
-                                    api_key = os.environ.get("GEMINI_API_KEY") or ""
-                                    client = None
-                                    if api_key:
-                                        try:
-                                            client = genai_api.Client(api_key=api_key)
-                                        except Exception as ce:
-                                            last_exc = ce
-                                            client = None
                                     for mt in order:
                                         try:
-                                            if client is not None:
-                                                resp = client.models.generate_content(
-                                                    model=(getattr(app_state, 'gemini_model_name', None) or "gemini-2.5-flash"),
-                                                    contents=[
-                                                        {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
-                                                        {"mime_type": mt, "data": b}
-                                                    ]
-                                                )
-                                            else:
-                                                # Fallback to any pre-initialized model client
-                                                if getattr(app_state, 'gemini_model', None) is None:
-                                                    raise RuntimeError("Gemini client not configured")
-                                                resp = app_state.gemini_model.generate_content([
-                                                    {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
-                                                    {"mime_type": mt, "data": b}
-                                                ])
+                                            print(f"WS gemini calling generate_content mt={mt} idx={idx} bytes={len(b)}")
+                                            resp = app_state.gemini_model.generate_content([
+                                                {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
+                                                {"mime_type": mt, "data": b}
+                                            ])
                                             break
                                         except Exception as ie:
                                             last_exc = ie
+                                            print(f"WS gemini generate_content failed mt={mt}: {ie}")
                                             continue
                                     if resp is None and last_exc:
                                         raise last_exc
@@ -302,7 +291,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                                                 sz = len(str(resp))
                                         except Exception:
                                             pass
-                                        print(f"WS gemini idx={idx} mt={order[0]} resp_len={sz} text_len={len(text)}")
+                                        print(f"WS gemini done idx={idx} resp_len={sz} text_len={len(text)}")
                                     except Exception:
                                         pass
                                     msg = {"type": "segment_transcript_gemini", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
@@ -349,11 +338,21 @@ async def ws_handler(websocket: WebSocket) -> None:
                     except Exception as e:
                         print(f"WS error pcm16: {e}")
                 else:
-                    await websocket.send_json({"type": "ack"})
+                    try:
+                        if websocket.application_state != WebSocketState.DISCONNECTED and websocket.client_state != WebSocketState.DISCONNECTED:
+                            await websocket.send_json({"type": "ack"})
+                    except Exception:
+                        break
         finally:
             try:
                 if not server_file.closed:
                     server_file.close()
+            except Exception:
+                pass
+            # Ensure websocket is closed on server side to prevent further receives after client disconnect
+            try:
+                if websocket.application_state != WebSocketState.DISCONNECTED and websocket.client_state != WebSocketState.DISCONNECTED:
+                    await websocket.close(code=1000)
             except Exception:
                 pass
 

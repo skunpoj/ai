@@ -1006,6 +1006,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         try {
                             if (!msg.transcript && !msg.error) console.log(`[WS:${msg.type}] empty result`, msg);
                             if (msg.error) console.log(`[WS:${msg.type}] error`, msg.error);
+                            console.log('Frontend: transcript arrived', msg);
                             const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || null);
                             if (!rec) return;
                             const serverId = getServerId(msg);
