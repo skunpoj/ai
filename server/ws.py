@@ -43,6 +43,8 @@ async def ws_handler(websocket: WebSocket) -> None:
     session_dir = os.path.join(recordings_dir, f"session_{session_ts}")
     os.makedirs(session_dir, exist_ok=True)
     segment_index = 0
+    # Serialize Gemini calls to reduce INTERNAL 500s from concurrent requests
+    gemini_lock = asyncio.Lock()
 
     async def receive_from_frontend() -> None:
         nonlocal segment_index
@@ -207,6 +209,10 @@ async def ws_handler(websocket: WebSocket) -> None:
                             async def do_google(idx: int, b: bytes, ext: str):
                                 try:
                                     text = await recognize_google_segment(app_state.speech_client, b, ext)
+                                    try:
+                                        print(f"WS google idx={idx} text_len={len(text or '')}")
+                                    except Exception:
+                                        pass
                                     msg = {"type": "segment_transcript_google", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
                                     await websocket.send_json(msg)
                                     try:
@@ -250,6 +256,10 @@ async def ws_handler(websocket: WebSocket) -> None:
                                         if resp is None and last_exc:
                                             raise last_exc
                                         text = extract_text_from_vertex_response(resp)
+                                    try:
+                                        print(f"WS vertex idx={idx} text_len={len(text or '')}")
+                                    except Exception:
+                                        pass
                                     msg = {"type": "segment_transcript_vertex", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
                                     await websocket.send_json(msg)
                                     try:
@@ -264,44 +274,63 @@ async def ws_handler(websocket: WebSocket) -> None:
                             print(f"WS dispatch: gemini idx={segment_index} ext={seg_ext} bytes={len(seg_bytes)}")
                             async def do_gemini(idx: int, b: bytes, ext: str):
                                 try:
-                                    order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
-                                    resp = None
-                                    last_exc = None
-                                    for mt in order:
+                                    async with gemini_lock:
+                                        order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
+                                        resp = None
+                                        last_exc = None
+                                        for mt in order:
+                                            # Retry a couple of times per mime to avoid transient 500s
+                                            for attempt in range(2):
+                                                try:
+                                                    print(f"WS gemini calling generate_content mt={mt} idx={idx} bytes={len(b)} attempt={attempt+1}")
+                                                    resp = app_state.gemini_model.generate_content([
+                                                        {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
+                                                        {"mime_type": mt, "data": b}
+                                                    ])
+                                                    break
+                                                except Exception as ie:
+                                                    last_exc = ie
+                                                    print(f"WS gemini generate_content failed mt={mt} attempt={attempt+1}: {ie}")
+                                                    await asyncio.sleep(0.25)
+                                            if resp is not None:
+                                                break
+                                        if resp is None and last_exc:
+                                            raise last_exc
+                                        text = extract_text_from_gemini_response(resp)
                                         try:
-                                            print(f"WS gemini calling generate_content mt={mt} idx={idx} bytes={len(b)}")
-                                            resp = app_state.gemini_model.generate_content([
-                                                {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
-                                                {"mime_type": mt, "data": b}
-                                            ])
-                                            break
-                                        except Exception as ie:
-                                            last_exc = ie
-                                            print(f"WS gemini generate_content failed mt={mt}: {ie}")
-                                            continue
-                                    if resp is None and last_exc:
-                                        raise last_exc
-                                    text = extract_text_from_gemini_response(resp)
-                                    try:
-                                        sz = 0
-                                        try:
-                                            if hasattr(resp, 'to_dict'):
-                                                sz = len(str(resp.to_dict()))
-                                            else:
-                                                sz = len(str(resp))
+                                            sz = 0
+                                            try:
+                                                if hasattr(resp, 'to_dict'):
+                                                    sz = len(str(resp.to_dict()))
+                                                else:
+                                                    sz = len(str(resp))
+                                            except Exception:
+                                                pass
+                                            print(f"WS gemini done idx={idx} resp_len={sz} text_len={len(text)}")
                                         except Exception:
                                             pass
-                                        print(f"WS gemini done idx={idx} resp_len={sz} text_len={len(text)}")
-                                    except Exception:
-                                        pass
-                                    msg = {"type": "segment_transcript_gemini", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
-                                    await websocket.send_json(msg)
-                                    try:
-                                        await sse_publish(msg)
-                                    except Exception:
-                                        pass
+                                        try:
+                                            print(f"WS gemini transcript idx={idx} text_len={len(text or '')}")
+                                        except Exception:
+                                            pass
+                                        msg = {"type": "segment_transcript_gemini", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
+                                        await websocket.send_json(msg)
+                                        try:
+                                            await sse_publish(msg)
+                                        except Exception:
+                                            pass
                                 except Exception as e:
                                     print(f"WS error gemini segment: {e}")
+                                    # Emit an error event so frontend can log and advance
+                                    try:
+                                        err_msg = {"type": "segment_transcript_gemini", "idx": idx, "error": str(e), "id": client_id, "ts": client_ts}
+                                        await websocket.send_json(err_msg)
+                                        try:
+                                            await sse_publish(err_msg)
+                                        except Exception:
+                                            pass
+                                    except Exception:
+                                        pass
                             asyncio.create_task(do_gemini(segment_index, seg_bytes, seg_ext))
 
                         # Dispatch AWS Transcribe (placeholder) if enabled and available
@@ -311,6 +340,10 @@ async def ws_handler(websocket: WebSocket) -> None:
                                 try:
                                     # Placeholder returns empty string; can be expanded to S3+job flow
                                     text = aws_transcribe.recognize_segment_placeholder(b, media_format=("ogg" if ext=="ogg" else "webm"))
+                                    try:
+                                        print(f"WS aws idx={idx} text_len={len(text or '')}")
+                                    except Exception:
+                                        pass
                                     msg = {"type": "segment_transcript_aws", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
                                     await websocket.send_json(msg)
                                     try:
