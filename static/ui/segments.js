@@ -73,7 +73,26 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   const tbody = document.getElementById(`segtbody-${record.id}`);
   if (!tbody) return null;
   const rowId = `segrow-${record.id}-${segIndex}`;
-  if (document.getElementById(rowId)) return document.getElementById(rowId);
+  const existing = document.getElementById(rowId);
+  if (existing) {
+    try { existing.setAttribute('data-start-ms', String(startMs)); } catch(_) {}
+    try {
+      const audioCell = existing.children && existing.children[0] ? existing.children[0] : null;
+      const timeCell = existing.children && existing.children[1] ? existing.children[1] : null;
+      if (audioCell) {
+        const sizeLabel = data.size ? `(${(data.size/1024).toFixed(0)} KB)` : '';
+        const mime = (data.url && data.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
+        const sizeHtml = sizeLabel ? `<small id="segsize-${record.id}-${segIndex}" data-load-full="${data.url || ''}" style="cursor:pointer">${sizeLabel}</small>` : '';
+        audioCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
+      }
+      if (timeCell) {
+        const startStr = formatElapsed(startMs - (record.startTs || startMs));
+        const endStr = formatElapsed(endMs - (record.startTs || endMs));
+        timeCell.textContent = `${startStr} – ${endStr}`;
+      }
+    } catch(_) {}
+    return existing;
+  }
   const tr = document.createElement('tr');
   tr.id = rowId;
   try { tr.setAttribute('data-start-ms', String(startMs)); } catch(_) {}

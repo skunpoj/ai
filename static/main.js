@@ -108,9 +108,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const pendingRowsByClientId = new Map(); // `${recId}:${clientId}` -> partial same shape
     const pendingRowsByServerId = new Map(); // `${recId}:${serverId}` -> partial same shape
     const insertedRows = new Set(); // `${recId}:${idx}` rows already inserted
+    const pendingInsertTimers = new Map(); // `${recId}:${idx}` -> timeoutId
+    const FORCE_WAIT_FOR_TRANSCRIPT = false; // when true, do not fallback-insert rows without transcripts
     function idxKey(recId, idx){ return `${recId}:${idx}`; }
     function clientKey(recId, clientId){ return `${recId}:${clientId}`; }
     function serverKey(recId, serverId){ return `${recId}:${serverId}`; }
+    function normalizeId(v){ try { return v === undefined || v === null ? '' : String(v); } catch(_) { return ''; } }
     function mergePending(dst, src){ if (!src) return dst; dst.saved = dst.saved || src.saved || null; dst.transcripts = Object.assign({}, src.transcripts || {}, dst.transcripts || {}); dst.inserted = !!(dst.inserted || src.inserted); return dst; }
     function setPending(map, key, updater){ const cur = map.get(key) || { saved: null, transcripts: {}, inserted: false }; const next = updater ? updater(cur) : cur; map.set(key, next); return next; }
     function collectEnabledServicesSync(){ try { const services = window.__services_cache; if (Array.isArray(services)) return services.filter(s=>s && s.enabled).map(s=>s.key); } catch(_) {} return ['google','vertex','gemini','aws']; }
@@ -123,7 +126,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const tx = p.transcripts || {};
         const enabled = collectEnabledServicesSync();
         const hasAnyTx = enabled.some(svc => typeof tx[svc] === 'string' && tx[svc].length);
-        if (!hasAnyTx) return;
+        if (!hasAnyTx) {
+            if (FORCE_WAIT_FOR_TRANSCRIPT) return; // strictly wait until some transcript arrives
+        }
         const d = p.saved;
         try {
             await prependSegmentRow(rec, segIndex, d, d.startMs || d.ts || Date.now(), d.endMs || ((d.startMs || d.ts || Date.now()) + (typeof segmentMs === 'number' ? segmentMs : 10000)));
@@ -158,11 +163,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
         } catch(_) {}
-        try { scheduleSegmentTimeouts(rec.id, segIndex); } catch(_) {}
+        try { if (!hasAnyTx) scheduleSegmentTimeouts(rec.id, segIndex); else scheduleSegmentTimeouts(rec.id, segIndex); } catch(_) {}
         insertedRows.add(k);
         // cleanup auxiliary maps for this segment
         try { const sid = getServerId(p.saved); if (sid) pendingRowsByServerId.delete(serverKey(rec.id, sid)); } catch(_) {}
         try { if (typeof p.saved.id === 'number') pendingRowsByClientId.delete(clientKey(rec.id, p.saved.id)); } catch(_) {}
+        // clear any pending fallback timer
+        try { const t = pendingInsertTimers.get(k); if (t) { clearTimeout(t); pendingInsertTimers.delete(k); } } catch(_) {}
+    }
+
+    // Fallback: if no transcript arrives in time, insert the row with blank cells so UI progresses
+    async function forceInsertWithoutTx(rec, segIndex){
+        const k = idxKey(rec.id, segIndex);
+        if (insertedRows.has(k)) return;
+        const p = pendingRowsByIdx.get(k);
+        if (!p || !p.saved) return;
+        const d = p.saved;
+        try {
+            await prependSegmentRow(rec, segIndex, d, d.startMs || d.ts || Date.now(), d.endMs || ((d.startMs || d.ts || Date.now()) + (typeof segmentMs === 'number' ? segmentMs : 10000)));
+        } catch(e) { console.log('Frontend: prependSegmentRow (fallback) failed', e); }
+        insertedRows.add(k);
+        // schedule provider timeouts to mark 'no result' cells
+        try { scheduleSegmentTimeouts(rec.id, segIndex); } catch(_) {}
+        try { const t = pendingInsertTimers.get(k); if (t) { clearTimeout(t); pendingInsertTimers.delete(k); } } catch(_) {}
     }
     function findSegmentRowEl(recId, segIndex, clientId, serverId) {
         try {
@@ -786,6 +809,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                 const base = setPending(pendingRowsByIdx, K, cur => { cur.saved = payload; return cur; });
                                 if (typeof data.id === 'number') setPending(pendingRowsByClientId, clientKey(rec.id, data.id), cur => mergePending(cur, base));
                                 if (serverId) setPending(pendingRowsByServerId, serverKey(rec.id, serverId), cur => mergePending(cur, base));
+                                // schedule fallback insertion only when not strictly waiting for transcript
+                                try {
+                                    if (!FORCE_WAIT_FOR_TRANSCRIPT && !pendingInsertTimers.has(K)) {
+                                        const TIMEOUT_MS = Number(segmentMs) && Number(segmentMs) >= 1000 ? (Number(segmentMs) + 1500) : 30000;
+                                        const to = setTimeout(() => {
+                                            try { forceInsertWithoutTx(rec, segIndex); } catch(_) {}
+                                        }, TIMEOUT_MS);
+                                        pendingInsertTimers.set(K, to);
+                                    }
+                                } catch(_) {}
                                 // If server already included transcripts, store and try insert
                                 if (data.transcripts || data.tx) {
                                     const tx = data.transcripts || data.tx || {};
@@ -995,15 +1028,36 @@ document.addEventListener('DOMContentLoaded', () => {
                                 let svc = (msg.type || '').replace('segment_transcript_', '') || '';
                                 if (!svc) svc = msg.svc || msg.provider || msg.service || '';
                                 if (svc) {
-                                    // Store transcript for insert-once; do not live-update cells pre-insert
+                                    // Always append a live indicator (or queue it if full table not rendered yet)
+                                    if (typeof msg.transcript === 'string' && msg.transcript.trim()) {
+                                        try {
+                                            const cell = ensureFullCell(rec.id, svc);
+                                            if (cell) appendFullLiveText(rec.id, svc, msg.transcript.trim());
+                                            else addPendingFullLive(rec, svc, msg.transcript.trim());
+                                        } catch(_) {}
+                                    }
                                     if (typeof msg.transcript === 'string' && msg.transcript.length) {
                                         if (segIndex >= 0) {
                                             const K = idxKey(rec.id, segIndex);
                                             setPending(pendingRowsByIdx, K, cur => { cur.transcripts = Object.assign({}, cur.transcripts || {}, { [svc]: msg.transcript }); return cur; });
-                                            // Persist mapping
                                             try { if (serverId) segmentIdToIndex.set(`${rec.id}:${serverId}`, segIndex); } catch(_) {}
-                                            // Attempt insertion now that we have a transcript
                                             await maybeInsertRowOnce(rec, segIndex);
+                                            // If row already exists, update arrays and cells immediately
+                                    try {
+                                        const row = document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                        if (row) {
+                                                    const arr = (rec.transcripts[svc] = rec.transcripts[svc] || []);
+                                                    while (arr.length <= segIndex) arr.push('');
+                                                    arr[segIndex] = msg.transcript;
+                                                    clearSvcTimeout(rec.id, segIndex, svc);
+                                            const td = row.querySelector(`td[data-svc="${svc}"]`);
+                                                    if (td) td.textContent = msg.transcript;
+                                                    rec.fullAppend = rec.fullAppend || {};
+                                                    const prev = rec.fullAppend[svc] || '';
+                                                    rec.fullAppend[svc] = prev ? (prev + ' ' + msg.transcript) : msg.transcript;
+                                                    try { setFullAssignedText(rec.id, svc, rec.fullAppend[svc]); } catch(_) {}
+                                        }
+                                    } catch(_) {}
                                         } else {
                                             if (typeof msg.id === 'number') setPending(pendingRowsByClientId, clientKey(rec.id, msg.id), cur => { cur.transcripts = Object.assign({}, cur.transcripts || {}, { [svc]: msg.transcript }); return cur; });
                                             if (serverId) setPending(pendingRowsByServerId, serverKey(rec.id, serverId), cur => { cur.transcripts = Object.assign({}, cur.transcripts || {}, { [svc]: msg.transcript }); return cur; });
@@ -1361,6 +1415,73 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!table) return;
         // Post fresh values so server renders current snapshot
         htmx.ajax('POST', '/render/full_row', { target: table, values: { record: JSON.stringify(record) }, swap: 'innerHTML' });
+    }
+
+    // Live provider cell helpers
+    function ensureFullCell(recordId, svc) {
+        try { return document.querySelector(`#fulltable-${recordId} td[data-svc="${svc}"]`); } catch(_) { return null; }
+    }
+    function addPendingFullLive(record, svc, text) {
+        try {
+            if (!record || !svc || !text) return;
+            record._pendingFullLive = record._pendingFullLive || {};
+            const prev = record._pendingFullLive[svc] || '';
+            record._pendingFullLive[svc] = prev ? (prev + ' ' + text) : text;
+        } catch(_) {}
+    }
+    function flushFullLive(record) {
+        try {
+            if (!record || !record._pendingFullLive) return;
+            const map = record._pendingFullLive;
+            Object.keys(map).forEach(svc => {
+                const txt = map[svc];
+                if (txt) {
+                    try { appendFullLiveText(record.id, svc, txt); } catch(_) {}
+                }
+            });
+        } catch(_) {}
+    }
+    function setFullAssignedText(recordId, svc, text) {
+        try {
+            const cell = ensureFullCell(recordId, svc);
+            if (!cell) return;
+            let span = cell.querySelector('span.full-text');
+            if (!span) {
+                span = document.createElement('span');
+                span.className = 'full-text';
+                try { if (cell.firstChild) cell.appendChild(document.createTextNode(' ')); } catch(_) {}
+                cell.appendChild(span);
+            }
+            span.textContent = text || '';
+        } catch(_) {}
+    }
+    function appendFullLiveText(recordId, svc, text) {
+        try {
+            if (!text) return;
+            let cell = ensureFullCell(recordId, svc);
+            if (!cell) {
+                // Attempt to re-render the full provider table so cells exist
+                try {
+                    const fullWrap = document.getElementById(`fulltable-${recordId}`);
+                    if (fullWrap && typeof htmx !== 'undefined') {
+                        htmx.ajax('POST', '/render/full_row', { target: fullWrap, values: { record: JSON.stringify(currentRecording || {}) }, swap: 'innerHTML' });
+                    }
+                } catch(_) {}
+                // Try again after a short delay
+                try { setTimeout(() => appendFullLiveText(recordId, svc, text), 80); } catch(_) {}
+                return;
+            }
+            let live = cell.querySelector('span.full-live');
+            if (!live) {
+                live = document.createElement('span');
+                live.className = 'full-live';
+                live.style.opacity = '0.7';
+                try { if (cell.firstChild) cell.appendChild(document.createTextNode(' ')); } catch(_) {}
+                cell.appendChild(live);
+            }
+            const sep = live.textContent && live.textContent.length ? ' ' : '';
+            live.textContent = (live.textContent || '') + sep + text;
+        } catch(_) {}
     }
 
     async function refreshSegmentRows(record) {
