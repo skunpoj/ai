@@ -455,6 +455,12 @@ def render_segment_row_route(record: str = '', idx: int = 0) -> Any:
         rec = {}
     try:
         services = [s for s in registry_list() if s.get("enabled")]
+        try:
+            import json as __dbg_json
+            print("[render_full_row_route] incoming record.fullAppend:", __dbg_json.dumps(rec.get("fullAppend", {}), ensure_ascii=False))
+            print("[render_full_row_route] incoming record.transcripts keys:", list((rec.get("transcripts", {}) or {}).keys()))
+        except Exception:
+            pass
         row = _render_segment_row(rec, services, int(idx) if idx is not None else 0)
         return HTMLResponse(str(row))
     except Exception:
@@ -496,6 +502,12 @@ def render_full_row_route(record: str = '') -> Any:
                     summaries[key] = _extract(resp) or ""
                 except Exception:
                     summaries[key] = full_text
+        try:
+            print("[render_full_row_route] summaries keys:", list(summaries.keys()))
+            for k, v in summaries.items():
+                print(f"[render_full_row_route] summary[{k}] =", (v or "").replace("\n"," ")[:200])
+        except Exception:
+            pass
         # First column: leave out download in this simplified table (kept in panel meta)
         cells = []
         for s in services:

@@ -27,6 +27,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const transcribeTimeouts = new Map();
     // Fixed segment duration per recording; captured at Start Record
     let activeSegmentMs = null;
+    // Track in-flight segment uploads and defer finalization until all are done
+    let pendingUploads = 0;
+    let finalizeRequested = false;
 
     // UI
     const startRecordingButton = document.getElementById('startRecording');
@@ -247,6 +250,64 @@ document.addEventListener('DOMContentLoaded', () => {
         lastRecordingId = currentRecording.id;
         ensureRecordingTab(currentRecording);
         try { await renderRecordingPanel(currentRecording); } catch(_) {}
+    }
+
+    function recomputeFullAppendFromTranscripts(rec) {
+        try {
+            const tx = rec.transcripts || {};
+            rec.fullAppend = rec.fullAppend || {};
+            Object.keys(tx).forEach(k => {
+                try {
+                    const arr = Array.isArray(tx[k]) ? tx[k] : [];
+                    rec.fullAppend[k] = arr.filter(Boolean).join(' ').trim();
+                } catch(_) {}
+            });
+        } catch(_) {}
+    }
+
+    async function performFinalizeIfReady() {
+        try {
+            if (!finalizeRequested) return;
+            if (pendingUploads > 0) return;
+            if (!currentRecording) return;
+            // Ensure last segment has been transcribed (slot exists) before proceeding
+            try {
+                const rec = currentRecording;
+                const segs = Array.isArray(rec.segments) ? rec.segments.filter(Boolean) : [];
+                const lastIdx = segs.length ? Math.max.apply(null, segs.map(s => Number(s.idx || 0))) : -1;
+                if (lastIdx >= 0) {
+                    const svcs = await getServicesCached();
+                    const enabledKeys = svcs.filter(s => s.enabled).map(s => s.key);
+                    const hasSlot = enabledKeys.some(k => {
+                        const arr = (rec.transcripts && rec.transcripts[k]) || [];
+                        return arr.length > lastIdx; // slot exists => transcript arrived (possibly empty)
+                    });
+                    if (!hasSlot) {
+                        setTimeout(() => { try { performFinalizeIfReady(); } catch(_) {} }, 120);
+                        return;
+                    }
+                }
+            } catch(_) {}
+            // Build fully appended text from all segments, then render and summarize
+            recomputeFullAppendFromTranscripts(currentRecording);
+            currentRecording.useLocalPreview = !!showLocalPreview;
+            try { console.log('[Finalize] fullAppend snapshot', JSON.parse(JSON.stringify(currentRecording.fullAppend||{}))); } catch(_) {}
+            await renderRecordingPanel(currentRecording);
+            try {
+                const fullDiv = document.getElementById(`fulltable-${currentRecording.id}`);
+                if (fullDiv) {
+                    try { fullDiv.dispatchEvent(new CustomEvent('refresh-full', { bubbles: true })); } catch(_) {}
+                    // Fallback manual POST
+                    try {
+                        const fd = new FormData();
+                        fd.append('record', JSON.stringify(currentRecording));
+                        fetch('/render/full_row', { method: 'POST', body: fd })
+                          .then(r => r.text()).then(html => { try { fullDiv.innerHTML = html; } catch(_) {} }).catch((e)=>{ try { console.log('[Finalize] manual full_row fetch error', e); } catch(_) {} });
+                    } catch(_) {}
+                }
+            } catch(_) {}
+            finalizeRequested = false;
+        } catch(_) {}
     }
 
     // Event Handlers
@@ -664,25 +725,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (currentRecording) {
                     currentRecording.audioUrl = URL.createObjectURL(audioBlob);
                     currentRecording.clientSizeBytes = audioBlob.size;
-                    currentRecording.useLocalPreview = !!showLocalPreview;
-                    renderRecordingPanel(currentRecording);
-                    try {
-                        // After stop, trigger HTMX refresh; if HTMX not present, fallback to manual fetch
-                        const fullDiv = document.getElementById(`fulltable-${currentRecording.id}`);
-                        if (fullDiv) {
-                            try { fullDiv.dispatchEvent(new CustomEvent('refresh-full', { bubbles: true })); } catch(_) {}
-                            // Fallback: manual POST and replace innerHTML
-                            try {
-                                const fd = new FormData();
-                                fd.append('record', JSON.stringify(currentRecording));
-                                fetch('/render/full_row', { method: 'POST', body: fd })
-                                  .then(r => r.text()).then(html => { try { fullDiv.innerHTML = html; } catch(_) {} }).catch(()=>{});
-                            } catch(_) {}
-                        }
-                    } catch(_) {}
                 }
                 try { if (currentRecording) stopElapsedTimer(currentRecording); } catch(_) {}
-                // uploadFullOnStop via HTTP can be added later
+                // Defer full-row insert/summary until all segment uploads and transcripts are processed
+                finalizeRequested = true;
+                await performFinalizeIfReady();
                 if (exportFullOnStop) {
                     try { await startRemuxAsync(currentRecording); } catch(_) {}
                 }
@@ -782,6 +829,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const b64 = btoa(bin);
                     const recId = String((currentRecording && currentRecording.startTs) || Date.now());
                     const payload = { recording_id: recId, audio_b64: b64, mime: capturedBlob.type || 'audio/webm', duration_ms: (activeSegmentMs || segmentMs), id: ts, idx: thisIdx, ts };
+                    pendingUploads += 1;
                     const res = await fetch('/segment_upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     const data = await res.json();
                     if (data && data.ok) {
@@ -819,6 +867,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 } catch(err) {
                     console.warn('segment upload error', err);
+                } finally {
+                    try { pendingUploads = Math.max(0, pendingUploads - 1); } catch(_) {}
+                    try { await performFinalizeIfReady(); } catch(_) {}
                 }
             };
             segmentRecorder.onstop = () => {
