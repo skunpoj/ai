@@ -178,7 +178,7 @@ if str(_ROOT) not in sys.path:
 
 from utils.credentials import ensure_google_credentials_from_env
 from server.config import CHUNK_MS, SEGMENT_MS_DEFAULT
-from server.state import app_state
+from server.state import app_state, set_full_summary_prompt, set_translation_prompt, set_translation_lang
 from server.routes import build_index, render_panel, render_segment_row, render_full_row, _render_segment_row
 from server.ws import ws_handler
 from server.services.registry import list_services as registry_list, set_service_enabled
@@ -284,6 +284,104 @@ def update_service(req: Any) -> Any:
     except Exception:
         return JSONResponse(registry_list())
 
+@rt("/services_bulk", methods=["POST"])
+def update_services_bulk(req: Any) -> Any:
+    # Accept HTMX form with checkbox names; enable when present
+    try:
+        data = req.form()
+        desired = {
+            'aws': bool(data.get('aws')),
+            'google': bool(data.get('google')),
+            'vertex': bool(data.get('vertex')),
+            'gemini': bool(data.get('gemini')),
+        }
+        for key, enabled in desired.items():
+            try:
+                set_service_enabled(key, enabled)
+            except Exception:
+                pass
+        return HTMLResponse("<small style=\"color:#6f6\">Saved.</small>")
+    except Exception:
+        return HTMLResponse("<small style=\"color:#f66\">Save failed.</small>")
+
+@rt("/settings_bulk", methods=["POST"])
+def settings_bulk(
+    aws: str = '', google: str = '', vertex: str = '', gemini: str = '',
+    full_summary_prompt: str = '', translation_prompt: str = '', translation_lang: str = '',
+    gemini_api_key: str = '', enable_summarization: str = '', enable_translation: str = ''
+) -> Any:
+    try:
+        # Providers
+        for key, val in [('aws', aws), ('google', google), ('vertex', vertex), ('gemini', gemini)]:
+            try:
+                set_service_enabled(key, bool(val))
+            except Exception:
+                pass
+        # Prompts & language
+        try:
+            if isinstance(full_summary_prompt, str) and full_summary_prompt.strip():
+                set_full_summary_prompt(full_summary_prompt.strip())
+        except Exception:
+            pass
+        try:
+            if isinstance(translation_prompt, str) and translation_prompt.strip():
+                set_translation_prompt(translation_prompt.strip())
+        except Exception:
+            pass
+        try:
+            if isinstance(translation_lang, str) and translation_lang.strip():
+                set_translation_lang(translation_lang.strip())
+        except Exception:
+            pass
+        # Gemini API key
+        try:
+            if isinstance(gemini_api_key, str) and gemini_api_key.strip():
+                ok = app_state.set_gemini_api_key(gemini_api_key.strip())
+                if not ok:
+                    return HTMLResponse("<small style=\"color:#f66\">Gemini key invalid or failed.</small>")
+        except Exception:
+            pass
+        # Feature flags (checkbox present -> non-empty)
+        try:
+            app_state.enable_summarization = bool(enable_summarization)
+        except Exception:
+            pass
+        try:
+            app_state.enable_translation = bool(enable_translation)
+        except Exception:
+            pass
+        return HTMLResponse("<small style=\"color:#6f6\">Settings saved.</small>")
+    except Exception:
+        return HTMLResponse("<small style=\"color:#f66\">Save failed.</small>")
+
+@rt("/summary_prompt", methods=["POST"])
+def update_summary_prompt(req: Any = None) -> Any:
+    # HTMX form handler; returns a small confirmation HTML snippet
+    try:
+        data = req.form() if req is not None else {}
+        val = (data.get("prompt") or "").strip()
+        if not val:
+            return HTMLResponse("<small style=\"color:#f66\">Prompt cannot be empty.</small>")
+        set_full_summary_prompt(val)
+        return HTMLResponse("<small style=\"color:#6f6\">Saved.</small>")
+    except Exception:
+        return HTMLResponse("<small style=\"color:#f66\">Save failed.</small>")
+
+@rt("/translation_settings", methods=["POST"])
+def update_translation_settings(req: Any = None) -> Any:
+    # HTMX form handler
+    try:
+        data = req.form() if req is not None else {}
+        prompt = (data.get("prompt") or "").strip()
+        lang = (data.get("lang") or "").strip()
+        if prompt:
+            set_translation_prompt(prompt)
+        if lang:
+            set_translation_lang(lang)
+        return HTMLResponse("<small style=\"color:#6f6\">Saved.</small>")
+    except Exception:
+        return HTMLResponse("<small style=\"color:#f66\">Save failed.</small>")
+
 @rt("/gemini_api_key", methods=["POST"])
 def set_gemini_key(api_key: str = '') -> Any:
     # FastHTML will map form/JSON fields into function args when named; avoid requiring req
@@ -371,30 +469,65 @@ def render_full_row_route(record: str = '') -> Any:
     try:
         services = [s for s in registry_list() if s.get("enabled")]
         header = Tr(*[Th(s["label"]) for s in services])
-        # Build first column with download icon + size when available and make clickable
-        first_cell_bits = []
-        try:
-            if rec.get("serverUrl"):
-                human = ""
-                size = int(rec.get("serverSizeBytes") or 0)
-                if size >= 1048576:
-                    human = f"({round(size/1048576,1)} MB)"
-                elif size >= 1024:
-                    human = f"({int(round(size/1024))} KB)"
-                elif size > 0:
-                    human = f"({size} B)"
-                first_cell_bits = [A("📥", href=rec.get("serverUrl"), download=True, title="Download", **{"data-load-full": rec.get("serverUrl")}, style="cursor:pointer;text-decoration:none"), Small(" "), Small(human, **{"data-load-full": rec.get("serverUrl")}, style="cursor:pointer")]
-        except Exception:
-            first_cell_bits = []
+        # Compute summaries using Gemini when enabled and only after Stop
+        from server.services.gemini_api import extract_text_from_gemini_response as _extract
+        summaries = {}
+        if bool(getattr(app_state, 'enable_summarization', True)) and getattr(app_state, 'gemini_model', None) is not None and bool(rec.get('stopTs')):
+            for s in services:
+                key = s["key"]
+                full_text = ((rec.get("fullAppend", {}) or {}).get(key, ""))
+                # Fallback to joined per-segment transcripts if fullAppend is empty
+                if not full_text:
+                    try:
+                        arr = ((rec.get("transcripts", {}) or {}).get(key, []) or [])
+                        if isinstance(arr, list):
+                            full_text = " ".join([str(x) for x in arr if x])
+                    except Exception:
+                        full_text = ""
+                if not full_text:
+                    summaries[key] = ""
+                    continue
+                try:
+                    prompt = (app_state.full_summary_prompt or "Summarize the transcription.")
+                    resp = app_state.gemini_model.generate_content([
+                        {"text": prompt},
+                        {"text": full_text}
+                    ])
+                    summaries[key] = _extract(resp) or ""
+                except Exception:
+                    summaries[key] = full_text
+        # First column: leave out download in this simplified table (kept in panel meta)
         cells = []
         for s in services:
-            val = ((rec.get("fullAppend", {}) or {}).get(s["key"], ""))
-            if not cells and first_cell_bits:
-                cells.append(Td(*first_cell_bits, data_svc=s["key"]))
+            key = s["key"]
+            show_summary = bool(getattr(app_state, 'enable_summarization', True)) and bool(rec.get('stopTs'))
+            if show_summary:
+                val = summaries.get(key)
+                if val is None:
+                    val = ((rec.get("fullAppend", {}) or {}).get(key, ""))
+                    if not val:
+                        try:
+                            arr = ((rec.get("transcripts", {}) or {}).get(key, []) or [])
+                            if isinstance(arr, list):
+                                val = " ".join([str(x) for x in arr if x])
+                        except Exception:
+                            val = ""
             else:
-                cells.append(Td(val, data_svc=s["key"]))
+                val = ((rec.get("fullAppend", {}) or {}).get(key, ""))
+                if not val:
+                    try:
+                        arr = ((rec.get("transcripts", {}) or {}).get(key, []) or [])
+                        if isinstance(arr, list):
+                            val = " ".join([str(x) for x in arr if x])
+                    except Exception:
+                        val = ""
+            cells.append(Td(val, data_svc=key))
         row = Tr(*cells, id=f"fullrow-{rec.get('id','')}")
-        table = Table(THead(header), TBody(row), border="0", cellpadding="0", cellspacing="0", style="border-collapse:collapse; border:0; width:100%")
+        table = Table(
+            Thead(header),
+            Tbody(row),
+            border="0", cellpadding="4", cellspacing="0", style="border-collapse:collapse; border:0; width:100%"
+        )
         return HTMLResponse(str(table))
     except Exception:
         return HTMLResponse("<table></table>")
@@ -552,6 +685,26 @@ async def segment_upload(recording_id: str = '', audio_b64: str = '', mime: str 
                 except Exception: pass
         except Exception:
             pass
+        # Gemini translation per-segment using saved translation prompt/lang (only when enabled)
+        try:
+            if getattr(app_state, 'enable_translation', False) and getattr(app_state, 'gemini_model', None) is not None:
+                tr_txt = ''
+                try:
+                    # Choose a base transcript to translate
+                    base_txt = results.get('google') or results.get('vertex') or results.get('gemini') or ''
+                    if base_txt:
+                        prompt = (app_state.translation_prompt or 'Translate the following text into the TARGET language.')
+                        lang = (app_state.translation_lang or 'en')
+                        resp = app_state.gemini_model.generate_content([
+                            {"text": f"{prompt}\nTARGET: {lang}"},
+                            {"text": base_txt}
+                        ])
+                        tr_txt = extract_text_from_gemini_response(resp)
+                except Exception:
+                    import traceback; errors['translation'] = traceback.format_exc(); tr_txt = ''
+                results['translation'] = tr_txt
+        except Exception:
+            pass
         return JSONResponse({"ok": True, "saved": saved, "results": results, "errors": errors})
     except Exception:
         import traceback
@@ -569,21 +722,58 @@ async def export_full(recording_id: str = '') -> Any:
         session_dir = os.path.join(root, f'session_{safe_rec_id}')
         if not os.path.isdir(session_dir):
             return JSONResponse({"ok": False, "error": "session_not_found"})
-        # NOTE: Proper WebM/OGG concatenation requires remuxing. Here we avoid heavy remux; instead we zip
-        # segments so the user can download all at once. This prevents creating a broken container.
-        import shutil
-        zip_path = os.path.join(root, f'session_{safe_rec_id}_segments.zip')
+        # Try ffmpeg remux first
         try:
-            if os.path.isfile(zip_path):
-                os.remove(zip_path)
+            import subprocess, shlex
+            # Build concat list file
+            list_path = os.path.join(session_dir, 'list.txt')
+            with open(list_path, 'w', encoding='utf-8') as lf:
+                for name in sorted(os.listdir(session_dir)):
+                    if name.startswith('segment_') and (name.endswith('.ogg') or name.endswith('.webm')):
+                        lf.write(f"file '{os.path.join(session_dir, name).replace('\\\\','/').replace('\\','/')}'\n")
+            # Decide container by first segment extension
+            first = next((n for n in sorted(os.listdir(session_dir)) if n.startswith('segment_') and (n.endswith('.ogg') or n.endswith('.webm'))), None)
+            if not first:
+                raise RuntimeError('no_segments')
+            out_ext = '.ogg' if first.endswith('.ogg') else '.webm'
+            out_path = os.path.join(root, f'session_{safe_rec_id}_full{out_ext}')
+            # Try stream copy
+            cmd = f"ffmpeg -y -f concat -safe 0 -i {shlex.quote(list_path)} -c copy {shlex.quote(out_path)}"
+            r = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+            if r.returncode != 0:
+                # Fallback to re-encode Opus for OGG; for WebM use libopus as well
+                cmd2 = f"ffmpeg -y -f concat -safe 0 -i {shlex.quote(list_path)} -c:a libopus -b:a 64k {shlex.quote(out_path)}"
+                r2 = subprocess.run(cmd2, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+                if r2.returncode != 0:
+                    raise RuntimeError('ffmpeg_failed')
+            url = f"/static/recordings/session_{safe_rec_id}_full{out_ext}"
+            return JSONResponse({"ok": True, "url": url, "method": "ffmpeg"})
         except Exception:
-            pass
-        shutil.make_archive(zip_path[:-4], 'zip', session_dir)
-        url = f"/static/recordings/session_{safe_rec_id}_segments.zip"
-        return JSONResponse({"ok": True, "url": url})
+            # ZIP fallback
+            import shutil
+            zip_path = os.path.join(root, f'session_{safe_rec_id}_segments.zip')
+            try:
+                if os.path.isfile(zip_path):
+                    os.remove(zip_path)
+            except Exception:
+                pass
+            shutil.make_archive(zip_path[:-4], 'zip', session_dir)
+            url = f"/static/recordings/session_{safe_rec_id}_segments.zip"
+            return JSONResponse({"ok": True, "url": url, "method": "zip"})
     except Exception:
         import traceback
         return JSONResponse({"ok": False, "error": traceback.format_exc()})
+
+# Wire async remux routes here to ensure 'rt' is available
+from server.routes import export_full_async as _export_full_async_impl, export_status as _export_status_impl
+
+@rt("/export_full_async", methods=["POST"])
+def export_full_async_route(recording_id: str = '') -> Any:
+    return _export_full_async_impl(recording_id=recording_id)
+
+@rt("/export_status", methods=["GET"])
+def export_status_route(job_id: str = '') -> Any:
+    return _export_status_impl(job_id=job_id)
 
 if __name__ == "__main__":
     try:

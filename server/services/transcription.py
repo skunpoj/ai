@@ -136,6 +136,21 @@ async def transcribe_all(raw: bytes, mime: str = "") -> Dict[str, Any]:
             results["gemini"] = gtxt
     except Exception as e:
         results["gemini_error"] = str(e)
+    # Translation (only when enabled)
+    try:
+        if getattr(app_state, 'enable_translation', False) and getattr(app_state, 'gemini_model', None) is not None:
+            base_txt = results.get('google') or results.get('vertex') or results.get('gemini') or ''
+            if base_txt:
+                prompt = (app_state.translation_prompt or 'Translate the following text into the TARGET language.')
+                lang = (app_state.translation_lang or 'en')
+                resp = app_state.gemini_model.generate_content([
+                    {"text": f"{prompt}\nTARGET: {lang}"},
+                    {"text": base_txt}
+                ])
+                from server.services.gemini_api import extract_text_from_gemini_response as _extract
+                results['translation'] = _extract(resp)
+    except Exception as e:
+        results['translation_error'] = str(e)
     return results
 
 

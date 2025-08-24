@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 # Install CA certificates to fix TLS verification for Google APIs
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 
