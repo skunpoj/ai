@@ -114,7 +114,9 @@ def _run_ffmpeg_concat(session_dir: str, out_path: str) -> None:
     with open(list_path, 'w', encoding='utf-8') as lf:
         for name in sorted(os.listdir(session_dir)):
             if name.startswith('segment_') and (name.endswith('.ogg') or name.endswith('.webm')):
-                lf.write(f"file '{os.path.join(session_dir, name).replace('\\\\','/').replace('\\','/')}'\n")
+                p = os.path.join(session_dir, name)
+                p_posix = p.replace('\\\\','/').replace('\\','/')
+                lf.write(f"file '{p_posix}'\n")
     cmd = f"ffmpeg -y -f concat -safe 0 -i {shlex.quote(list_path)} -c copy {shlex.quote(out_path)}"
     r = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
     if r.returncode != 0:
