@@ -53,7 +53,8 @@ class AppState:
         # Prompt used to summarize full transcripts per provider
         self.full_summary_prompt: str = (
             "Summarize the following transcription into concise bullet points capturing key points, decisions, and action items. "
-            "Avoid filler. Preserve factual content."
+            "Avoid filler. Preserve factual content. "
+            "Return plain text only. Do NOT return JSON, HTML, Markdown, or code blocks."
         )
         # Translation settings
         self.translation_prompt: str = (
