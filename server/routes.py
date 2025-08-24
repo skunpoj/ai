@@ -66,6 +66,9 @@ hr { display:none; }
                 Label("Time", _for="toggleTimeColToolbar", checked=True),
                 Button("Start Transcribe", id="startTranscribe", disabled=True),
                 Button("Stop Transcribe", id="stopTranscribe", disabled=True),
+                # YouTube URL transcription controls
+                Input(type="text", id="ytUrl", placeholder="YouTube URL", style="min-width:240px;margin-left:8px"),
+                Button("Transcribe YouTube", id="transcribeYoutubeBtn"),
             ),
             # Removed redundant transcription status line
             Div(id="liveTranscriptContainer"),

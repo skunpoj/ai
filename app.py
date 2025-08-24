@@ -210,6 +210,9 @@ from typing import Any, List, Dict
 from starlette.responses import JSONResponse, HTMLResponse
 import json
 import os, base64, time
+import tempfile
+import subprocess
+from typing import Optional
 
 # --- Credentials Handling (START) ---
 cred = ensure_google_credentials_from_env()
@@ -876,6 +879,132 @@ def export_full_async_route(recording_id: str = '') -> Any:
 @rt("/export_status", methods=["GET"])
 def export_status_route(job_id: str = '') -> Any:
     return _export_status_impl(job_id=job_id)
+
+
+@rt("/transcribe_youtube", methods=["POST"])
+async def transcribe_youtube(url: str = "") -> Any:
+    try:
+        url = (url or "").strip()
+        if not url:
+            return JSONResponse({"ok": False, "error": "missing_url"})
+        try:
+            import yt_dlp as ydl
+        except Exception:
+            return JSONResponse({"ok": False, "error": "yt_dlp_not_installed"})
+
+        tmpdir = tempfile.mkdtemp(prefix="yt_")
+        in_path: Optional[str] = None
+        info = None
+        try:
+            opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': os.path.join(tmpdir, 'input.%(ext)s'),
+                'quiet': True,
+                'no_warnings': True,
+            }
+            with ydl.YoutubeDL(opts) as dl:
+                info = dl.extract_info(url, download=True)
+                in_path = dl.prepare_filename(info)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"download_failed: {e}"})
+
+        if not in_path or not os.path.isfile(in_path):
+            return JSONResponse({"ok": False, "error": "download_missing"})
+
+        # Convert to OGG (Opus) for maximum compatibility with providers
+        root = os.path.join(os.path.abspath('static'), 'recordings')
+        os.makedirs(root, exist_ok=True)
+        ts = int(time.time()*1000)
+        safe_id = f"yt_{ts}"
+        out_path = os.path.join(root, f"{safe_id}.ogg")
+        try:
+            # ffmpeg -y -i input -vn -c:a libopus -b:a 96k out.ogg
+            r = subprocess.run(
+                ['ffmpeg','-y','-i', in_path, '-vn', '-c:a', 'libopus', '-b:a', '96k', out_path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600
+            )
+            if r.returncode != 0 or (not os.path.isfile(out_path)):
+                return JSONResponse({"ok": False, "error": "ffmpeg_failed"})
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"ffmpeg_error: {e}"})
+
+        # Read bytes for transcription
+        try:
+            with open(out_path, 'rb') as f:
+                ogg_bytes = f.read()
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"read_failed: {e}"})
+
+        # Estimate duration from yt-dlp info when available
+        duration_ms = 0
+        try:
+            dur = int(float(info.get('duration') or 0))
+            duration_ms = dur * 1000
+        except Exception:
+            duration_ms = 0
+
+        # Transcribe via common helper
+        try:
+            from server.services.transcription import transcribe_all
+            results = await transcribe_all(ogg_bytes, 'audio/ogg')
+        except Exception:
+            results = {}
+
+        size_bytes = 0
+        try:
+            size_bytes = os.path.getsize(out_path)
+        except Exception:
+            size_bytes = 0
+
+        server_url = f"/static/recordings/{safe_id}.ogg"
+        start_ts = ts
+        stop_ts = ts + (duration_ms or 0)
+        # Assemble a record compatible with frontend renderers
+        transcripts = { 'google': [], 'vertex': [], 'gemini': [], 'aws': [] }
+        for k in list(transcripts.keys()):
+            val = results.get(k)
+            if val is not None:
+                transcripts[k] = [str(val)]
+        if 'translation' in results:
+            try:
+                transcripts['translation'] = [str(results.get('translation') or '')]
+            except Exception:
+                pass
+        full_append = {}
+        for k, v in results.items():
+            if k.endswith('_error'):
+                continue
+            try:
+                full_append[k] = str(v) if v is not None else ''
+            except Exception:
+                full_append[k] = ''
+        record = {
+            'id': f'rec-{start_ts}',
+            'audioUrl': None,
+            'serverUrl': server_url,
+            'serverSizeBytes': size_bytes,
+            'clientSizeBytes': None,
+            'startTs': start_ts,
+            'stopTs': stop_ts,
+            'durationMs': duration_ms,
+            'segments': [
+                {
+                    'idx': 0,
+                    'url': server_url,
+                    'mime': 'audio/ogg',
+                    'size': size_bytes,
+                    'ts': start_ts,
+                    'startMs': start_ts,
+                    'endMs': stop_ts
+                }
+            ],
+            'transcripts': transcripts,
+            'fullAppend': full_append,
+            'timeouts': { 'google': [False], 'vertex': [False], 'gemini': [False], 'aws': [False] },
+        }
+        return JSONResponse({"ok": True, "record": record})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"server_error: {e}"})
 
 if __name__ == "__main__":
     try:
