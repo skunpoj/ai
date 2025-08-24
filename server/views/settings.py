@@ -114,6 +114,13 @@ def build_settings_modal() -> Any:
             style="display:flex;gap:8px;align-items:center;margin-bottom:6px"
         ),
         Textarea(app_state.full_summary_prompt or "", name="full_summary_prompt", id="fullSummaryPrompt", style="width:100%;min-height:80px"),
+        Div(
+            Button("Plain text", id="tplPlain", type="button", style="padding:4px 8px;margin-right:6px"),
+            Button("Markdown", id="tplMarkdown", type="button", style="padding:4px 8px;margin-right:6px"),
+            Button("Bullets (concise)", id="tplBullets", type="button", style="padding:4px 8px;margin-right:6px"),
+            Small("Click a template to populate the prompt textarea", style="color:#aaa;margin-left:6px"),
+            style="margin:6px 0 8px 0"
+        ),
         Small("Used to summarize provider full transcripts into the full row."),
         id="settingsTabContentSum",
         style="padding:8px;border:1px solid #444;background:#1e1e1e;display:none"

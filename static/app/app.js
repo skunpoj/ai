@@ -8,6 +8,32 @@ import { createMediaRecorderWithFallback, safelyStopStream } from '/static/app/r
 import { pendingRowsByIdx, pendingRowsByClientId, pendingRowsByServerId, insertedRows, pendingInsertTimers, segmentIdToIndex, idxKey, clientKey, serverKey, mergePending, setPending, getServerId, resetSegmentsState } from '/static/app/segments_state.js';
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Ensure Markdown is rendered for any cells with class "marked" after HTMX swaps
+    function renderMarkdownInCells(root) {
+        try {
+            const scope = root || document;
+            const nodes = scope.querySelectorAll('td.marked, div.marked');
+            nodes.forEach(el => {
+                try {
+                    if (el.dataset.mdRendered === '1') return;
+                    const src = el.textContent || '';
+                    if (!src) return;
+                    if (window.marked && typeof window.marked.parse === 'function') {
+                        el.innerHTML = window.marked.parse(src);
+                        el.dataset.mdRendered = '1';
+                    }
+                } catch(_) {}
+            });
+        } catch(_) {}
+    }
+    // Initial pass on load (in case server rendered any .marked content inline)
+    try { renderMarkdownInCells(document); } catch(_) {}
+    // Re-render after any HTMX content swap
+    try {
+        document.body.addEventListener('htmx:afterSwap', (e) => {
+            try { renderMarkdownInCells(e && e.target ? e.target : document); } catch(_) {}
+        });
+    } catch(_) {}
     // State
     let socket = null;
     let mediaRecorder = null;
@@ -73,6 +99,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const testResults = document.getElementById('testResults');
     const saveSummaryPromptBtn = document.getElementById('saveSummaryPrompt');
     const fullSummaryPromptInput = document.getElementById('fullSummaryPrompt');
+    const tplPlainBtn = document.getElementById('tplPlain');
+    const tplMarkdownBtn = document.getElementById('tplMarkdown');
+    const tplBulletsBtn = document.getElementById('tplBullets');
     const translationLangSelect = document.getElementById('translationLang');
     const translationPromptInput = document.getElementById('translationPrompt');
     let segmentMs = (typeof window !== 'undefined' && typeof window.SEGMENT_MS !== 'undefined') ? window.SEGMENT_MS : 10000;
@@ -83,7 +112,21 @@ document.addEventListener('DOMContentLoaded', () => {
     let testActiveStream = null;
 
     function ensureRecordingTab(record) { if (!tabsBar || !panelsHost) return; ensureUITab(tabsBar, panelsHost, record); }
-    async function renderRecordingPanel(record) { ensureRecordingTab(record); try { await renderPanel(record); } catch(_) {} }
+    async function renderRecordingPanel(record) {
+        ensureRecordingTab(record);
+        try { await renderPanel(record); } catch(_) {}
+        // After Stop, request the summary into the dedicated summary container; keep full record visible until summary arrives
+        try {
+            if (record && record.stopTs) {
+                const summaryDiv = document.getElementById(`summarytable-${record.id}`);
+                const vals = JSON.stringify({ record: JSON.stringify(record) });
+                if (summaryDiv) {
+                    summaryDiv.setAttribute('hx-vals', vals.replace(/\"/g,'\\\"'));
+                    summaryDiv.dispatchEvent(new CustomEvent('refresh-summary', { bubbles: true }));
+                }
+            }
+        } catch(_) {}
+    }
 
     // Elapsed timer while recording
     let elapsedTimerId = null;
@@ -293,17 +336,46 @@ document.addEventListener('DOMContentLoaded', () => {
             currentRecording.useLocalPreview = !!showLocalPreview;
             try { console.log('[Finalize] fullAppend snapshot', JSON.parse(JSON.stringify(currentRecording.fullAppend||{}))); } catch(_) {}
             await renderRecordingPanel(currentRecording);
+            // Process HTMX on the newly rendered panel to enable summary container
+            try { if (window && window.htmx && typeof window.htmx.process === 'function') { const p = document.getElementById(`panel-${currentRecording.id}`); if (p) window.htmx.process(p); } } catch(_) {}
+            // Render summary into its container using a direct POST; hide full block after success
             try {
-                const fullDiv = document.getElementById(`fulltable-${currentRecording.id}`);
-                if (fullDiv) {
-                    try { fullDiv.dispatchEvent(new CustomEvent('refresh-full', { bubbles: true })); } catch(_) {}
-                    // Fallback manual POST
-                    try {
-                        const fd = new FormData();
-                        fd.append('record', JSON.stringify(currentRecording));
-                        fetch('/render/full_row', { method: 'POST', body: fd })
-                          .then(r => r.text()).then(html => { try { fullDiv.innerHTML = html; } catch(_) {} }).catch((e)=>{ try { console.log('[Finalize] manual full_row fetch error', e); } catch(_) {} });
-                    } catch(_) {}
+                const summaryDiv = document.getElementById(`summarytable-${currentRecording.id}`);
+                if (summaryDiv) {
+                    const compact = { id: currentRecording.id, stopTs: currentRecording.stopTs, fullAppend: currentRecording.fullAppend, transcripts: currentRecording.transcripts };
+                    // Prefer JSON to avoid HTML parsing inconsistencies; render ourselves
+                    const fd = new FormData();
+                    fd.append('record', JSON.stringify(compact));
+                    fetch('/render/full_row_json', { method: 'POST', body: fd })
+                      .then(r => r.json())
+                      .then(data => {
+                          try {
+                              if (!data || data.ok === false) throw new Error('no_summary');
+                              const md = String(data.summary_text || '').trim();
+                              summaryDiv.innerHTML = '';
+                              const holder = document.createElement('div');
+                              holder.className = 'marked';
+                              holder.textContent = md;
+                              summaryDiv.appendChild(holder);
+                              summaryDiv.style.display = 'block';
+                          } catch(_) {
+                              summaryDiv.innerHTML = '<small style="color:#aaa">No summary.</small>';
+                              summaryDiv.style.display = 'block';
+                          }
+                          // Render markdown
+                          try {
+                              const el = summaryDiv.querySelector('.marked');
+                              if (el) {
+                                  const src = el.textContent || '';
+                                  if (src && window.marked && typeof window.marked.parse === 'function') el.innerHTML = window.marked.parse(src);
+                              }
+                          } catch(_) {}
+                          try { const full = document.getElementById(`fulltable-${currentRecording.id}`); if (full && summaryDiv.textContent && summaryDiv.textContent.trim()) full.style.display = 'none'; } catch(_) {}
+                      })
+                      .catch(() => {
+                          // Fallback: if fetch fails, try HTMX once
+                          try { if (window && window.htmx && typeof window.htmx.ajax === 'function') window.htmx.ajax('POST', '/render/full_row', { target: summaryDiv, swap: 'innerHTML', values: { record: JSON.stringify(compact) } }); } catch(_) {}
+                      });
                 }
             } catch(_) {}
             finalizeRequested = false;
@@ -455,6 +527,19 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
     } catch(_) {}
+    // Settings: Prompt templates
+    try {
+        const setVal = (txt) => { try { fullSummaryPromptInput.value = txt; } catch(_) {} };
+        if (tplPlainBtn && fullSummaryPromptInput) tplPlainBtn.addEventListener('click', () => setVal(
+            'Summarize the following transcription into clear, concise sentences capturing key points, decisions, and action items. Avoid filler. Preserve factual content. Return plain text only. Do NOT return JSON, HTML, Markdown, or code blocks.'
+        ));
+        if (tplMarkdownBtn && fullSummaryPromptInput) tplMarkdownBtn.addEventListener('click', () => setVal(
+            'Summarize the following transcription as GitHub-flavored Markdown with short headings and bullet points. Use simple lists, no tables or HTML. Keep it concise and factual.'
+        ));
+        if (tplBulletsBtn && fullSummaryPromptInput) tplBulletsBtn.addEventListener('click', () => setVal(
+            '- Key points and facts\n- Decisions\n- Action items (assignee if known)\n\nReturn plain text bullet list only.'
+        ));
+    } catch(_) {}
     // Settings: Save Translation Settings
     try {
         const saveBtn = document.getElementById('saveTranslationSettings');
@@ -601,6 +686,21 @@ document.addEventListener('DOMContentLoaded', () => {
             if (testResults) testResults.textContent = 'Loaded custom audio.';
         } catch(_) {}
     });
+
+    // Hide full record after summary rendered into its container
+    try {
+        document.body.addEventListener('htmx:afterSwap', (e) => {
+            try {
+                const tgt = e && e.target;
+                if (!tgt || !tgt.id) return;
+                if (tgt.id.startsWith('summarytable-')) {
+                    const id = tgt.id.substring('summarytable-'.length);
+                    const full = document.getElementById(`fulltable-${id}`);
+                    if (full) full.style.display = 'none';
+                }
+            } catch(_) {}
+        });
+    } catch(_) {}
     if (testRecord2s) testRecord2s.addEventListener('click', async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
