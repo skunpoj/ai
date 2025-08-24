@@ -1,11 +1,20 @@
+## Overview
+
+Live Transcription & Segmented Recording with on-stop summarization.
+
+- Continuous recording with per-segment uploads for robust STT.
+- Dynamic provider columns (Google STT, Vertex Gemini, Gemini API, AWS beta).
+- Optional per-session summary (plain text or Markdown), rendered in a dedicated Summary section.
+
 ### Recording architecture
 
 - Default: single-recorder (timeslice) mode. One `MediaRecorder` captures continuously; each chunk (timeslice) is treated as a segment and uploaded, ensuring gapless capture. Flag `USE_COMPAT_SINGLE_RECORDER` in `static/main.js` controls this behavior.
 - Optional: dual-recorder loop (feature-flagged). A per-segment recorder runs in a loop to produce clean containers while a full recorder runs continuously. This is behind a flag due to potential mic contention on some browsers/devices.
 
-### UI tables
+### UI sections
 
-- `fulltable-<id>`: provider-wide concatenated transcripts for the session. Kept for quick at-a-glance review; can be pruned if redundant.
+- Summary section: always present while recording; shows "Waiting for summary…" until Stop. On Stop, the server returns a single summary string which is rendered (Markdown supported). After summary appears, the full record block hides automatically.
+- `fulltable-<id>`: provider-wide concatenated transcripts for the session (visible until summary arrives).
 - `recordmeta-<id>`: full recording row (player + size) injected on stop; segment rows (`segrow-<id>-<idx>`) are created as segments arrive.
 
 ### Stability notes
@@ -13,15 +22,12 @@
 - Avoid multiple concurrent `MediaRecorder`s bound to the same `MediaStream` to reduce resource contention.
 - Countdown row is pinned to the top and updated with RAF; segment rows are inserted below to prevent flicker.
 
-Live Transcription & Segmented Recording
+## Quick Start
 
-This app records audio continuously while creating short, sequential segment files for robust server-side STT.
-
-Quick Start
-- Start the server.
-- Open the app, click Start Recording, and allow microphone access.
-- During recording: provider table appends live; segment table shows countdown → temp → saved rows.
-- On Stop: a top row is inserted with full player, download, and size. The tab title shows start→end (duration).
+1. Start the server.
+2. Open the app, click Start Recording, and allow microphone access.
+3. During recording: provider table appends live; segment table shows countdown → temp → saved rows.
+4. On Stop: the Summary section is populated and the full record block is hidden.
 
 Core Behaviors
 - Live append to provider table during recording.
@@ -163,7 +169,7 @@ While attempts were made to update `certifi` and set the `REQUESTS_CA_BUNDLE` en
   - aws_transcribe.py: AWS Transcribe scaffold (S3/streaming to be implemented)
   - registry.py: runtime registry; toggle services via `POST /services {key, enabled}`
 - static/
-  - main.js: orchestrator; delegates to modular UI helpers
+  - app.js: orchestrator (HTTP-only mode); delegates to modular UI helpers
   - audio/pcm-worklet.js: AudioWorkletNode processor for PCM16 capture
   - ui/services.js: fetches `/services` with small TTL cache
   - ui/ws.js: WebSocket utilities and ensureOpenSocket helper
@@ -180,6 +186,9 @@ The index page includes a "Settings" modal with:
 These call `POST /services` and `/gemini_api_key` and the UI re-renders columns dynamically.
 
 ### Frontend lint/format (optional)
+# Docs
+
+- See `docs/CODE_REFERENCE.md` for a function-by-function reference with usage notes.
 
 If you want linting/formatting, add the following files and run with npm:
 
@@ -226,6 +235,12 @@ If you want linting/formatting, add the following files and run with npm:
    - Dispatch in `server/ws.py` when enabled in registry.
 2. Frontend:
    - No change needed for columns; the UI reads `/services` and renders accordingly.
+
+### Summarization
+
+- Settings → Summarization: enable/disable, customize the prompt (plain text or Markdown output).
+- The backend uses your prompt and full transcript to produce `summary_text` returned by `/render_full_row_json`.
+- The frontend renders the string in the Summary section (Markdown supported via MarkedJS).
 
 ### Gemini Providers
 

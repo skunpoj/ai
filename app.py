@@ -829,7 +829,10 @@ async def export_full(recording_id: str = '') -> Any:
             with open(list_path, 'w', encoding='utf-8') as lf:
                 for name in sorted(os.listdir(session_dir)):
                     if name.startswith('segment_') and (name.endswith('.ogg') or name.endswith('.webm')):
-                        lf.write(f"file '{os.path.join(session_dir, name).replace('\\\\','/').replace('\\','/')}'\n")
+                        p = os.path.join(session_dir, name)
+                        # Avoid backslashes inside f-string expressions; compute then replace
+                        p_posix = p.replace('\\\\','/').replace('\\','/')
+                        lf.write(f"file '{p_posix}'\n")
             # Decide container by first segment extension
             first = next((n for n in sorted(os.listdir(session_dir)) if n.startswith('segment_') and (n.endswith('.ogg') or n.endswith('.webm'))), None)
             if not first:
