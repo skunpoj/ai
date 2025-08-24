@@ -4,14 +4,21 @@ import { bytesToLabel } from '/static/ui/format.js';
 import { ensureTab as ensureUITab, activateTab as activateUITab } from '/static/ui/tabs.js';
 import { renderRecordingPanel as renderPanel } from '/static/ui/renderers.js';
 import { buildWSUrl, parseWSMessage, sendJSON, ensureOpenSocket } from '/static/ui/ws.js';
+import { createWsMessageHandler } from '/static/ui/ws_handlers.js';
 import { showPendingCountdown, prependSegmentRow, insertTempSegmentRow } from '/static/ui/segments.js';
 import { setButtonsOnStart, setButtonsOnStop } from '/static/ui/recording.js';
 import { acquireWakeLock, releaseWakeLock, initWakeLockVisibilityReacquire } from '/static/app/wake_lock.js';
 import { createSegmentLoop, arrayBufferToBase64 as ab2b64 } from '/static/app/segment_loop.js';
 import { safelyStopStream, createMediaRecorderWithFallback } from '/static/app/recorder_utils.js';
+import { pendingRowsByIdx, pendingRowsByClientId, pendingRowsByServerId, insertedRows, pendingInsertTimers, segmentIdToIndex, idxKey, clientKey, serverKey, mergePending, setPending, getServerId, resetSegmentsState } from '/static/app/segments_state.js';
 
-// Main frontend controller: wires recording controls, websocket, segments loop,
-// tabbed UI, and dynamic provider columns.
+// Legacy monolithic controller file.
+// Replaced by /static/app/app.js. This file is intentionally reduced to a stub.
+// If this file executes, something still references /static/main.js.
+// We log an error and throw to surface lingering references early.
+
+console.error('ERROR: static/main.js (legacy) was loaded. The app now uses /static/app/app.js. Please update references.');
+throw new Error('Legacy main.js loaded');
 document.addEventListener('DOMContentLoaded', () => {
     let mediaRecorder; // Continuous full recorder
     let audioChunks = [];
@@ -100,27 +107,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const transcribeTimeouts = new Map(); // key: `${recId}:${idx}:${svc}` -> timeoutId
     const pendingCellUpdates = new Map(); // key: `${recId}:${idx}:${svc}` -> latest transcript
     const pendingCellUpdatesByClientId = new Map(); // key: `${recId}:${clientId}:${svc}`
-    const segmentIdToIndex = new Map(); // key: `${recId}:${serverId}` -> idx
     const pendingCellUpdatesByServerId = new Map(); // key: `${recId}:${serverId}:${svc}`
-    function getServerId(obj) { try { return obj && (obj.segment_id || obj.sid || obj.server_id || null); } catch(_) { return null; } }
     // Insert-once strategy: wait until we have saved info AND at least one transcript
-    const pendingRowsByIdx = new Map(); // `${recId}:${idx}` -> { saved: {...}, transcripts: {svc:text}, inserted: bool }
-    const pendingRowsByClientId = new Map(); // `${recId}:${clientId}` -> partial same shape
-    const pendingRowsByServerId = new Map(); // `${recId}:${serverId}` -> partial same shape
-    const insertedRows = new Set(); // `${recId}:${idx}` rows already inserted
-    const pendingInsertTimers = new Map(); // `${recId}:${idx}` -> timeoutId
     const FORCE_WAIT_FOR_TRANSCRIPT = false; // when true, do not fallback-insert rows without transcripts
-    function idxKey(recId, idx){ return `${recId}:${idx}`; }
-    function clientKey(recId, clientId){ return `${recId}:${clientId}`; }
-    function serverKey(recId, serverId){ return `${recId}:${serverId}`; }
-    function normalizeId(v){ try { return v === undefined || v === null ? '' : String(v); } catch(_) { return ''; } }
-    function mergePending(dst, src){ if (!src) return dst; dst.saved = dst.saved || src.saved || null; dst.transcripts = Object.assign({}, src.transcripts || {}, dst.transcripts || {}); dst.inserted = !!(dst.inserted || src.inserted); return dst; }
-    function setPending(map, key, updater){ const cur = map.get(key) || { saved: null, transcripts: {}, inserted: false }; const next = updater ? updater(cur) : cur; map.set(key, next); return next; }
     function collectEnabledServicesSync(){ try { const services = window.__services_cache; if (Array.isArray(services)) return services.filter(s=>s && s.enabled).map(s=>s.key); } catch(_) {} return ['google','vertex','gemini','aws']; }
     // Insert the row exactly once (idempotent). Requires saved info and at least one transcript
     async function maybeInsertRowOnce(rec, segIndex){
         const k = idxKey(rec.id, segIndex);
-        if (insertedRows.has(k)) return;
+        if (insertedRows.has(k) || document.getElementById(`segrow-${rec.id}-${segIndex}`)) return;
         const p = pendingRowsByIdx.get(k);
         if (!p || !p.saved) return;
         const tx = p.transcripts || {};
@@ -147,13 +141,21 @@ document.addEventListener('DOMContentLoaded', () => {
                             while (arr.length <= segIndex) arr.push('');
                             arr[segIndex] = text;
                         } catch(_) {}
-                        const td = row.querySelector(`td[data-svc="${svc}"]`);
-                        if (td) td.textContent = text;
-                        rec.fullAppend = rec.fullAppend || {}; const prev = rec.fullAppend[svc] || ''; rec.fullAppend[svc] = prev ? (prev + ' ' + text) : text;
-                        // Update full provider cell or trigger render if absent
+                        // Mark this segment/provider as appended to avoid duplicates later
+                        try { rec._appended = rec._appended || {}; rec._appended[`${svc}:${segIndex}`] = true; } catch(_) {}
+                        // Update segment cell
                         try {
+                            const td = row.querySelector(`td[data-svc="${svc}"]`);
+                            if (td) td.textContent = text;
+                        } catch(_) {}
+                        // Compute full text from transcript array to avoid duplicate concatenation
+                        try {
+                            const arr = rec.transcripts[svc] || [];
+                            const joined = Array.isArray(arr) ? arr.filter(Boolean).join(' ') : '';
+                            rec.fullAppend = rec.fullAppend || {};
+                            rec.fullAppend[svc] = joined;
                             const fullCell = document.querySelector(`#fulltable-${rec.id} td[data-svc="${svc}"]`);
-                            if (fullCell) fullCell.textContent = rec.fullAppend[svc];
+                            if (fullCell) fullCell.textContent = joined;
                             else {
                                 const fullWrap = document.getElementById(`fulltable-${rec.id}`);
                                 if (fullWrap && typeof htmx !== 'undefined') htmx.ajax('POST', '/render/full_row', { target: fullWrap, values: { record: JSON.stringify(rec) }, swap: 'innerHTML' });
@@ -205,6 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch(_) {}
         return null;
     }
+    // resetSegmentsState is imported from segments_state.js
     let audioCtxInstance = null; // Shared AudioContext to fully release audio resources on stop
     let testActiveStream = null; // Tracks settings-modal test recorder stream
     
@@ -287,14 +290,11 @@ document.addEventListener('DOMContentLoaded', () => {
     async function ensureSocketOpen() {
         try {
             if (!socket || (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING)) {
-                const wsUrl = buildWSUrl(window.location, '/ws_stream');
-                socket = new WebSocket(wsUrl);
-                // Attach lightweight handlers so status reflects before recording begins
-                if (!socket._basicHandlersAttached) {
-                    socket.addEventListener('open', () => {
-                        connStatus.innerText = 'WebSocket: open';
-                        try { sendJSON(socket, { type: 'hello' }); } catch(_) {}
-                    });
+                socket = ensureOpenSocket('/ws_stream', (ws) => {
+                    try { connStatus.innerText = 'WebSocket: open'; } catch(_) {}
+                    try { sendJSON(ws, { type: 'hello' }); } catch(_) {}
+                });
+                if (socket && !socket._statusHandlersAttached) {
                     socket.addEventListener('message', ev => {
                         try {
                             const msg = JSON.parse(ev.data);
@@ -304,8 +304,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         } catch (_) {}
                     });
                     socket.addEventListener('error', err => { console.warn('Frontend: WebSocket error', err); });
-                    socket.addEventListener('close', () => { connStatus.innerText = 'WebSocket: closed'; });
-                    socket._basicHandlersAttached = true;
+                    socket.addEventListener('close', () => { try { connStatus.innerText = 'WebSocket: closed'; } catch(_) {} });
+                    socket._statusHandlersAttached = true;
                 }
             }
         } catch(_) {}
@@ -569,6 +569,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Transcription control is via buttons; default off at start
         enableGoogleSpeech = false;
+        // Reset segment state between sessions to avoid duplicate/ghost rows
+        try {
+            if (window.__recClockRaf) cancelAnimationFrame(window.__recClockRaf);
+        } catch(_) {}
+        try {
+            pendingRowsByIdx.clear();
+            pendingRowsByClientId.clear();
+            pendingRowsByServerId.clear();
+            insertedRows.clear();
+            pendingInsertTimers.forEach((to) => { try { clearTimeout(to); } catch(_) {} });
+            pendingInsertTimers.clear();
+            segmentIdToIndex.clear();
+        } catch(_) {}
+        try { if (seenTxKeys && seenTxKeys.clear) seenTxKeys.clear(); } catch(_) {}
         recordStartTs = Date.now();
         currentRecording = {
             id: `rec-${recordStartTs}`,
@@ -772,9 +786,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         stopRecordingButton.disabled = true;
                         return;
                     }
-                startSegmentLoop();
-                // Ensure first pending row is created and subsequent cycles keep a visible countdown row
-                try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
+                    startSegmentLoop();
+                    // Ensure first pending row is created and subsequent cycles keep a visible countdown row
+                    try { showPendingCountdown(currentRecording.id, segmentMs, () => segmentLoopActive, () => (segmentRecorder && segmentRecorder.state === 'recording')); } catch(_) {}
                 }
                 // Attach WS message handler for UI updates as a fallback when SSE isn't available
                 try {
@@ -802,23 +816,23 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                             // Remove any temp row for this client timestamp
                             try { const temp = document.getElementById(`segtemp-${rec.id}-${data.id}`); if (temp && temp.parentElement) temp.parentElement.removeChild(temp); } catch(_) {}
-                            // Store saved info; defer insertion until transcript(s) arrive
+                            // Store saved info and insert row immediately so UI always progresses
                             try {
                                 const payload = { url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs: seededStart, endMs: seededEnd, id: data.id, segment_id: serverId };
                                 const K = idxKey(rec.id, segIndex);
                                 const base = setPending(pendingRowsByIdx, K, cur => { cur.saved = payload; return cur; });
                                 if (typeof data.id === 'number') setPending(pendingRowsByClientId, clientKey(rec.id, data.id), cur => mergePending(cur, base));
                                 if (serverId) setPending(pendingRowsByServerId, serverKey(rec.id, serverId), cur => mergePending(cur, base));
-                                // schedule fallback insertion only when not strictly waiting for transcript
+                                // Insert row once if not already present to avoid duplicates
                                 try {
-                                    if (!FORCE_WAIT_FOR_TRANSCRIPT && !pendingInsertTimers.has(K)) {
-                                        const TIMEOUT_MS = Number(segmentMs) && Number(segmentMs) >= 1000 ? (Number(segmentMs) + 1500) : 30000;
-                                        const to = setTimeout(() => {
-                                            try { forceInsertWithoutTx(rec, segIndex); } catch(_) {}
-                                        }, TIMEOUT_MS);
-                                        pendingInsertTimers.set(K, to);
+                                    const alreadyInserted = insertedRows.has(K) || !!document.getElementById(`segrow-${rec.id}-${segIndex}`);
+                                    if (!alreadyInserted) {
+                                        await prependSegmentRow(rec, segIndex, payload, seededStart, seededEnd);
                                     }
                                 } catch(_) {}
+                                try { scheduleSegmentTimeouts(rec.id, segIndex); } catch(_) {}
+                                // Mark as inserted to prevent any later fallback insertion from duplicating the first row
+                                try { insertedRows.add(idxKey(rec.id, segIndex)); } catch(_) {}
                                 // If server already included transcripts, store and try insert
                                 if (data.transcripts || data.tx) {
                                     const tx = data.transcripts || data.tx || {};
@@ -995,17 +1009,26 @@ document.addEventListener('DOMContentLoaded', () => {
                                     });
                                 } catch(_) {}
                             }
-                            // If user requested stop, close WS shortly after save confirmation
+                            // Close WS gracefully after final save if user had stopped
                             if (pendingStop && socket && socket.readyState === WebSocket.OPEN) {
                                 if (savedCloseTimer) { try { clearTimeout(savedCloseTimer); } catch(_) {} }
-                                savedCloseTimer = setTimeout(() => { try { socket.close(); } catch(_) {} }, 300);
+                                savedCloseTimer = setTimeout(() => { try { socket.close(1000, 'normal closure'); } catch(_) {} }, 1000);
                             }
                         } catch(_) {}
                     };
                     const handleTranscript = async (msg) => {
                         try {
                             if (!msg.transcript && !msg.error) console.log(`[WS:${msg.type}] empty result`, msg);
-                            if (msg.error) console.log(`[WS:${msg.type}] error`, msg.error);
+                            if (msg.error) {
+                                try {
+                                    const svcName = (msg.type || '').replace('segment_transcript_', '') || (msg.svc || msg.provider || msg.service || '');
+                                    const idxStr = (typeof msg.idx === 'number') ? String(msg.idx) : '?';
+                                    const idStr = (typeof msg.id === 'number') ? String(msg.id) : '';
+                                    console.error(`[WS:${msg.type}] provider=${svcName} idx=${idxStr} id=${idStr} error:`, msg.error);
+                                } catch(_) {
+                                    console.error(`[WS:${msg.type}] error`, msg.error);
+                                }
+                            }
                             console.log('Frontend: transcript arrived', msg);
                             const rec = currentRecording || (recordings.find(r => r && r.id === lastRecordingId) || null);
                             if (!rec) return;
@@ -1029,14 +1052,15 @@ document.addEventListener('DOMContentLoaded', () => {
                                 let svc = (msg.type || '').replace('segment_transcript_', '') || '';
                                 if (!svc) svc = msg.svc || msg.provider || msg.service || '';
                                 if (svc) {
-                                    // Always append a live indicator (or queue it if full table not rendered yet)
-                                    if (typeof msg.transcript === 'string' && msg.transcript.trim()) {
-                                        try {
-                                            const cell = ensureFullCell(rec.id, svc);
-                                            if (cell) appendFullLiveText(rec.id, svc, msg.transcript.trim());
-                                            else addPendingFullLive(rec, svc, msg.transcript.trim());
-                                        } catch(_) {}
-                                    }
+                                    // Dedupe exact same transcript or error per svc+idx to avoid duplicate updates
+                                    try {
+                                        const key = `${svc}:${segIndex}:${(msg.transcript||msg.error||'')}`;
+                                        if (seenTxKeys && seenTxKeys.has(key)) return;
+                                        if (seenTxKeys) seenTxKeys.add(key);
+                                    } catch(_) {}
+                                    // Avoid double-append in compat timeslice mode; append live only in non-compat mode
+                                    // In compat mode we avoid appending live directly to prevent duplicates.
+                                    // Always recompute fullAppend from transcript arrays after updates.
                                     if (typeof msg.transcript === 'string' && msg.transcript.length) {
                                         if (segIndex >= 0) {
                                             const K = idxKey(rec.id, segIndex);
@@ -1053,10 +1077,14 @@ document.addEventListener('DOMContentLoaded', () => {
                                                     clearSvcTimeout(rec.id, segIndex, svc);
                                             const td = row.querySelector(`td[data-svc="${svc}"]`);
                                                     if (td) td.textContent = msg.transcript;
-                                                    rec.fullAppend = rec.fullAppend || {};
-                                                    const prev = rec.fullAppend[svc] || '';
-                                                    rec.fullAppend[svc] = prev ? (prev + ' ' + msg.transcript) : msg.transcript;
-                                                    try { setFullAssignedText(rec.id, svc, rec.fullAppend[svc]); } catch(_) {}
+                                                    // Recompute full text from array to avoid duplicate concatenation
+                                                    try {
+                                                        const arr = rec.transcripts[svc] || [];
+                                                        const joined = Array.isArray(arr) ? arr.filter(Boolean).join(' ') : '';
+                                                        rec.fullAppend = rec.fullAppend || {};
+                                                        rec.fullAppend[svc] = joined;
+                                                        setFullAssignedText(rec.id, svc, joined);
+                                                    } catch(_) {}
                                         }
                                     } catch(_) {}
                                         } else {
@@ -1099,17 +1127,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             } catch(_) {}
                         } catch(_) {}
                     };
-                    socket.addEventListener('message', (ev) => {
-                        try {
-                            const msg = JSON.parse(ev.data);
-                            if (!msg || !msg.type) return;
-                            if (msg.type === 'segment_ack') return handleSegmentAck(msg);
-                            if (msg.type === 'segment_row') return handleSegmentSaved(msg);
-                            if (msg.type === 'segment_saved') return handleSegmentSaved(msg);
-                            if (msg.type === 'saved') return handleSaved(msg);
-                            if (msg.type.startsWith('segment_transcript')) return handleTranscript(msg);
-                        } catch(_) {}
+                    const wsOnMessage = createWsMessageHandler({
+                        onReady: () => {},
+                        onSegmentSaved: (data) => handleSegmentSaved(data),
+                        onTranscript: (_svc, data) => handleTranscript(data),
+                        onSaved: (data) => handleSaved(data),
+                        onPong: (data) => { try { connStatus.innerText = `WebSocket: pong (${data.ts || ''})`; } catch(_) {} },
+                        onAuth: () => {},
+                        onAck: () => {},
                     });
+                    socket.onmessage = wsOnMessage;
                 } catch(_) {}
             };
             if (socket.readyState === WebSocket.OPEN) {
@@ -1253,8 +1280,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         sendJSON(socket, { type: 'full_upload', audio: b64full, mime: recMimeType || 'audio/webm' });
                     }
                 } catch (_) {}
-                // Close socket as requested; will reopen on next Start Recording
-                try { if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) socket.close(); } catch(_) {}
+                // Do not close the socket here; wait for server 'saved' ack to avoid races
+                // The socket will be closed in handleSaved when pendingStop is true
                 // Final defensive cleanup of mic stream to avoid OS-level "in use" conflicts
                 stopCurrentStreamTracks();
                 if (currentRecording) renderRecordingPanel(currentRecording);
@@ -1297,6 +1324,8 @@ document.addEventListener('DOMContentLoaded', () => {
             transcribeTimeouts.forEach((to) => { try { clearTimeout(to); } catch(_) {} });
             transcribeTimeouts.clear();
         } catch(_) {}
+        // Reset mapped ids to avoid cross-session index confusion
+        try { segmentIdToIndex.clear(); } catch(_) {}
         // Do not close socket here; wait for 'saved' confirmation to close
     });
 
@@ -1446,14 +1475,42 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const cell = ensureFullCell(recordId, svc);
             if (!cell) return;
-            let span = cell.querySelector('span.full-text');
-            if (!span) {
-                span = document.createElement('span');
-                span.className = 'full-text';
-                try { if (cell.firstChild) cell.appendChild(document.createTextNode(' ')); } catch(_) {}
-                cell.appendChild(span);
+            // Preserve existing download link and size label if present
+            let href = '';
+            try {
+                const dl = cell.querySelector('a[data-load-full]');
+                if (dl) href = dl.getAttribute('href') || '';
+            } catch(_) {}
+            let sizeText = '';
+            try {
+                const sm = cell.querySelector('small[data-load-full]');
+                if (sm) sizeText = sm.textContent || '';
+            } catch(_) {}
+            // Rebuild cell content to avoid duplicate text nodes
+            try { cell.innerHTML = ''; } catch(_) {}
+            if (href) {
+                try {
+                    const a = document.createElement('a');
+                    a.textContent = '📥'; a.title = 'Download'; a.style.cursor = 'pointer'; a.style.textDecoration = 'none';
+                    a.setAttribute('href', href); a.setAttribute('download', ''); a.setAttribute('data-load-full', href);
+                    cell.appendChild(a);
+                } catch(_) {}
+                if (sizeText) {
+                    try {
+                        cell.appendChild(document.createTextNode(' '));
+                        const sm = document.createElement('small');
+                        sm.textContent = sizeText; sm.setAttribute('data-load-full', href); sm.style.cursor = 'pointer';
+                        cell.appendChild(sm);
+                    } catch(_) {}
+                }
             }
-            span.textContent = text || '';
+            try { if (cell.firstChild) cell.appendChild(document.createTextNode(' ')); } catch(_) {}
+            try {
+                const span = document.createElement('span');
+                span.className = 'full-text';
+                span.textContent = text || '';
+                cell.appendChild(span);
+            } catch(_) {}
         } catch(_) {}
     }
     function appendFullLiveText(recordId, svc, text) {

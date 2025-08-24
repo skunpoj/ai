@@ -73,6 +73,16 @@ def build_settings_modal() -> Any:
                 Button("Apply", id="useGeminiKey", style="height:28px;padding:0 10px;font-size:12px"),
                 style="margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:8px"
             ),
+            Div(
+                Input(type="checkbox", id="uploadFullToggle"),
+                Label("Upload full on Stop", _for="uploadFullToggle"),
+                style="margin-bottom:8px;display:flex;gap:8px;align-items:center"
+            ),
+            Div(
+                Input(type="checkbox", id="exportFullToggle"),
+                Label("Server export (remux) full on Stop", _for="exportFullToggle"),
+                style="margin-bottom:8px;display:flex;gap:8px;align-items:center"
+            ),
             Hr(),
             H5("Transcribe Test"),
             Div(Audio(controls=True, id="testAudio", style="width:100%")),
@@ -80,6 +90,7 @@ def build_settings_modal() -> Any:
                 Input(type="file", id="testUpload", accept="audio/*"),
                 Button("Record 2s", id="testRecord2s", style="padding:4px 10px;font-size:12px"),
                 Button("Transcribe Test", id="testRun", style="padding:4px 10px;font-size:12px"),
+                Button("Test via WS", id="testViaWS", style="padding:4px 10px;font-size:12px"),
                 style="margin-bottom:8px;display:flex;gap:8px;align-items:center"
             ),
             Small("Results:", style="color:#aaa"),
@@ -88,7 +99,7 @@ def build_settings_modal() -> Any:
         ),
         Div(
             Button("Check Connection", id="testConnection", style="padding:4px 10px;font-size:12px"),
-            P("WebSocket: not connected", id="connStatus", style="margin:0"),
+            P("WebSocket: checking…", id="connStatus", style="margin:0"),
             style="display:flex;gap:8px;align-items:center"
         )
     )

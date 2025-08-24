@@ -77,7 +77,8 @@ hr { display:none; }
                 "try { const cg = document.getElementById('cred_google'); if (cg) { const i = window.GOOGLE_AUTH_INFO||{}; cg.textContent = `Google: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}`; } } catch(_) {}\n"
                 "try { const cv = document.getElementById('cred_vertex'); if (cv) { const i = window.GOOGLE_AUTH_INFO||{}; cv.textContent = `Vertex: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}`; } } catch(_) {}"
             ),
-            Script(src="/static/main.js", type="module")
+            # New modular frontend controller replaces legacy main.js
+            Script(src="/static/app/app.js", type="module")
         )
 
 
@@ -173,9 +174,9 @@ def build_panel_html(record: Dict[str, Any]) -> str:
 
     # Segments table
     seg_header = Tr(
-        Th("Segment", style="border:0;padding:0"),
         Th("Time", style="border:0;padding:0", data_col="time"),
-        *[Th(s["label"], style="border:0;padding:0") for s in services]
+        *[Th(s["label"], style="border:0;padding:0") for s in services],
+        Th("Playback", style="border:0;padding:0")
     )
     seg_rows: List[Any] = []
     segments: List[Dict[str, Any]] = record.get("segments", []) or []
@@ -239,22 +240,7 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
     segments: List[Dict[str, Any]] = record.get("segments", []) or []
     transcripts: Dict[str, List[str]] = record.get("transcripts", {}) or {}
     seg = segments[idx] if idx < len(segments) else None
-    seg_cell_children: List[Any] = []
-    if seg and seg.get("url"):
-        seg_cell_children.append(Audio(Source(src=seg["url"], type=seg.get("mime") or "audio/webm"), controls=True))
-        try:
-            seg_cell_children.append(Space())
-            seg_cell_children.append(A("📥", href=seg.get("url") or "", download=True, title="Download", **{"data-load-full": seg.get("url") or ""}, style="cursor:pointer;text-decoration:none"))
-        except Exception:
-            pass
-        if isinstance(seg.get("size"), int):
-            kb = int(seg["size"]/1024)
-            try:
-                seg_cell_children.append(Space())
-                seg_cell_children.append(Small(f"({kb} KB)", id=f"segsize-{record.get('id','')}-{idx}", **{"data-load-full": (seg.get("url") or "")}, style="cursor:pointer"))
-            except Exception:
-                seg_cell_children.append(Space(f" ({kb} KB)"))
-    seg_cell = Td(*seg_cell_children)
+    # Build provider cells first
     time_str = ""
     try:
         if seg and seg.get("startMs") and seg.get("endMs"):
@@ -275,10 +261,27 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
             pass
         svc_cells.append(Td(txt or "", data_svc=s["key"]))
     import json as __json
+    # Playback last
+    play_kids: List[Any] = []
+    if seg and seg.get("url"):
+        play_kids.append(Audio(Source(src=seg["url"], type=seg.get("mime") or "audio/webm"), controls=True))
+        try:
+            play_kids.append(Space())
+            play_kids.append(A("📥", href=seg.get("url") or "", download=True, title="Download", style="cursor:pointer;text-decoration:none"))
+        except Exception:
+            pass
+        if isinstance(seg.get("size"), int):
+            kb = int(seg["size"]/1024)
+            try:
+                play_kids.append(Space())
+                play_kids.append(Small(f"({kb} KB)"))
+            except Exception:
+                play_kids.append(Space(f" ({kb} KB)"))
+    play_cell = Td(*play_kids)
     return Tr(
-        seg_cell,
         time_cell,
         *svc_cells,
+        play_cell,
         id=f"segrow-{record.get('id','')}-{idx}",
         hx_post="/render/segment_row",
         hx_trigger="refresh-row",

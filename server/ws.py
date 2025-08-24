@@ -1,4 +1,230 @@
 import os
+import base64
+import asyncio
+import queue
+import time
+from starlette.websockets import WebSocket, WebSocketDisconnect
+from server.state import app_state
+from server.services.google_stt import recognize_segment as recognize_google_segment
+from server.services.vertex_gemini import build_vertex_contents, extract_text_from_vertex_response
+from server.services.vertex_langchain import is_available as lc_vertex_available, transcribe_segment_via_langchain
+from server.services.gemini_api import extract_text_from_gemini_response
+from server.services.registry import is_enabled as service_enabled
+from server.services import aws_transcribe
+
+
+def now_ms() -> int:
+    return int(round(time.time() * 1000))
+
+
+async def ws_handler(websocket: WebSocket) -> None:
+    requests_q = queue.Queue()
+    pcm_requests_q = queue.Queue()
+
+    # Save recordings under ./static/recordings to match served URLs
+    recordings_dir = os.path.join("static", "recordings")
+    os.makedirs(recordings_dir, exist_ok=True)
+    session_ts = now_ms()
+    server_filename = f"recording_{session_ts}.webm"
+    server_filepath = os.path.join(recordings_dir, server_filename)
+    server_file = open(server_filepath, "ab")
+
+    session_dir = os.path.join(recordings_dir, f"session_{session_ts}")
+    os.makedirs(session_dir, exist_ok=True)
+    segment_index = 0
+
+    async def receive_from_frontend() -> None:
+        nonlocal segment_index
+        try:
+            transcribe_enabled = False
+            while True:
+                try:
+                    message = await websocket.receive_json()
+                    mtype = message.get("type") if isinstance(message, dict) else None
+                except WebSocketDisconnect:
+                    break
+                except Exception as e:
+                    print(f"WS error receive_json: {e}")
+                    break
+
+                if mtype == "hello":
+                    await websocket.send_json({"type": "ready"})
+                    continue
+                if mtype == "ping":
+                    await websocket.send_json({"type": "pong", "ts": now_ms()})
+                    continue
+                if mtype == "ping_start":
+                    await websocket.send_json({"type": "ack", "what": "start"})
+                    continue
+                if mtype == "ping_stop":
+                    await websocket.send_json({"type": "ack", "what": "stop"})
+                    continue
+                if mtype == "transcribe":
+                    transcribe_enabled = bool(message.get("enabled", False))
+                    await websocket.send_json({"type": "ack", "what": "transcribe", "enabled": transcribe_enabled})
+                    if transcribe_enabled:
+                        await websocket.send_json({
+                            "type": "auth",
+                            "ready": bool(app_state.speech_client and app_state.streaming_config),
+                            "info": app_state.auth_info or {}
+                        })
+                        await websocket.send_json({"type": "status", "message": "Transcribing... awaiting results"})
+                    continue
+                if mtype == "full_upload" and message.get("audio"):
+                    try:
+                        decoded_full = base64.b64decode(message.get("audio"))
+                        try:
+                            if not server_file.closed:
+                                server_file.close()
+                        except Exception:
+                            pass
+                        with open(server_filepath, "wb") as sf:
+                            sf.write(decoded_full)
+                        saved_url = f"/static/recordings/{server_filename}"
+                        await websocket.send_json({"type": "saved", "url": saved_url, "size": len(decoded_full)})
+                    except Exception as e:
+                        print(f"WS error full_upload: {e}")
+                    continue
+                if "end_stream" in message and message["end_stream"]:
+                    try:
+                        if not server_file.closed:
+                            server_file.flush(); server_file.close()
+                        saved_url = f"/static/recordings/{server_filename}"
+                        size_bytes = 0
+                        try:
+                            size_bytes = os.path.getsize(server_filepath)
+                        except Exception:
+                            pass
+                        await websocket.send_json({"type": "saved", "url": saved_url, "size": size_bytes})
+                    except Exception as e:
+                        print(f"WS error end_stream save: {e}")
+                    break
+
+                audio_data_b64 = message.get("audio")
+                pcm_b64 = message.get("pcm16")
+                if mtype == "segment" and audio_data_b64:
+                    try:
+                        seg_bytes = base64.b64decode(audio_data_b64)
+                        client_mime = (message.get("mime") or "").lower()
+                        seg_ext = "ogg" if ("ogg" in client_mime) else "webm"
+                        seg_path = os.path.join(session_dir, f"segment_{segment_index}.{seg_ext}")
+                        with open(seg_path, "wb") as sf:
+                            sf.write(seg_bytes)
+                        seg_url = f"/static/recordings/session_{session_ts}/segment_{segment_index}.{seg_ext}"
+                        client_id = message.get("id")
+                        client_ts = message.get("ts") or now_ms()
+                        # Notify client immediately so a row is inserted during recording
+                        await websocket.send_json({
+                            "type": "segment_saved",
+                            "idx": segment_index,
+                            "url": seg_url,
+                            "id": client_id,
+                            "ts": client_ts,
+                            "status": "ws_ok",
+                            "ext": seg_ext,
+                            "mime": client_mime,
+                            "size": len(seg_bytes)
+                        })
+                        # Dispatch providers asynchronously
+                        if transcribe_enabled and service_enabled("google") and app_state.speech_client is not None:
+                            async def do_google(idx: int, b: bytes, ext: str):
+                                try:
+                                    text = await recognize_segment_safe(b, ext)
+                                    await websocket.send_json({"type": "segment_transcript_google", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
+                                except Exception as e:
+                                    print(f"WS error google segment: {e}")
+                            async def recognize_segment_safe(b: bytes, ext: str):
+                                return await recognize_google_segment(app_state.speech_client, b, ext)
+                            asyncio.create_task(do_google(segment_index, seg_bytes, seg_ext))
+                        if transcribe_enabled and service_enabled("vertex") and app_state.vertex_client is not None:
+                            async def do_vertex(idx: int, b: bytes, ext: str):
+                                try:
+                                    order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
+                                    text = ""
+                                    if lc_vertex_available():
+                                        for mt in order:
+                                            text = transcribe_segment_via_langchain(app_state.vertex_client, app_state.vertex_model_name, b, mt)
+                                            if text:
+                                                break
+                                    else:
+                                        resp = None
+                                        last_exc = None
+                                        for mt in order:
+                                            try:
+                                                resp = app_state.vertex_client.models.generate_content(
+                                                    model=app_state.vertex_model_name,
+                                                    contents=build_vertex_contents(b, mt)
+                                                )
+                                                break
+                                            except Exception as ie:
+                                                last_exc = ie
+                                                continue
+                                        if resp is None and last_exc:
+                                            raise last_exc
+                                        text = extract_text_from_vertex_response(resp)
+                                    await websocket.send_json({"type": "segment_transcript_vertex", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
+                                except Exception as e:
+                                    print(f"WS error vertex segment: {e}")
+                            asyncio.create_task(do_vertex(segment_index, seg_bytes, seg_ext))
+                        if transcribe_enabled and service_enabled("gemini") and app_state.gemini_model is not None:
+                            async def do_gemini(idx: int, b: bytes, ext: str):
+                                try:
+                                    order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
+                                    resp = None
+                                    last_exc = None
+                                    for mt in order:
+                                        try:
+                                            resp = app_state.gemini_model.generate_content([
+                                                {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
+                                                {"mime_type": mt, "data": b}
+                                            ])
+                                            break
+                                        except Exception as ie:
+                                            last_exc = ie
+                                            continue
+                                    if resp is None and last_exc:
+                                        raise last_exc
+                                    text = extract_text_from_gemini_response(resp)
+                                    await websocket.send_json({"type": "segment_transcript_gemini", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
+                                except Exception as e:
+                                    print(f"WS error gemini segment: {e}")
+                            asyncio.create_task(do_gemini(segment_index, seg_bytes, seg_ext))
+                        if transcribe_enabled and service_enabled("aws") and aws_transcribe.is_available():
+                            async def do_aws(idx: int, b: bytes, ext: str):
+                                try:
+                                    text = aws_transcribe.recognize_segment_placeholder(b, media_format=("ogg" if ext=="ogg" else "webm"))
+                                    await websocket.send_json({"type": "segment_transcript_aws", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts})
+                                except Exception as e:
+                                    print(f"WS error aws segment: {e}")
+                            asyncio.create_task(do_aws(segment_index, seg_bytes, seg_ext))
+                        segment_index += 1
+                    except Exception as e:
+                        print(f"WS error segment save: {e}")
+                    continue
+
+                if audio_data_b64:
+                    try:
+                        decoded_chunk = base64.b64decode(audio_data_b64)
+                        server_file.write(decoded_chunk); server_file.flush()
+                    except Exception as e:
+                        print(f"WS error writing chunk: {e}")
+                elif pcm_b64 and transcribe_enabled and app_state.speech_client and app_state.streaming_config:
+                    try:
+                        raw = base64.b64decode(pcm_b64)
+                        pcm_requests_q.put(raw)
+                    except Exception as e:
+                        print(f"WS error pcm16: {e}")
+                else:
+                    await websocket.send_json({"type": "ack"})
+        finally:
+            try:
+                if not server_file.closed:
+                    server_file.close()
+            except Exception:
+                pass
+
+    await receive_from_frontend()
+import os
 from pathlib import Path
 import base64
 import asyncio
@@ -16,10 +242,12 @@ from server.services.google_stt import recognize_segment as recognize_google_seg
 from server.services.vertex_gemini import build_vertex_contents, extract_text_from_vertex_response
 from server.services.vertex_langchain import is_available as lc_vertex_available, transcribe_segment_via_langchain
 from server.services.gemini_api import extract_text_from_gemini_response
+from server.services.transcription import transcribe_gemini as tx_gemini
 from google import genai as genai_api
 from server.services.registry import is_enabled as service_enabled
 from server.services import aws_transcribe
 from server.sse_bus import publish as sse_publish
+from server.segment_store import insert_segment, append_transcript
 
 
 def now_ms() -> int:
@@ -43,8 +271,17 @@ async def ws_handler(websocket: WebSocket) -> None:
     session_dir = os.path.join(recordings_dir, f"session_{session_ts}")
     os.makedirs(session_dir, exist_ok=True)
     segment_index = 0
-    # Serialize Gemini calls to reduce INTERNAL 500s from concurrent requests
-    gemini_lock = asyncio.Lock()
+    # Gemini throttling is not required when using the centralized helper, keep simple
+
+    async def safe_send_json(payload: dict) -> None:
+        """Attempt to send a JSON message; ignore if socket is closed or send fails."""
+        try:
+            if websocket.application_state == WebSocketState.DISCONNECTED or websocket.client_state == WebSocketState.DISCONNECTED:
+                return
+            await websocket.send_json(payload)
+        except Exception:
+            # Swallow any send errors to avoid bubbling up after client disconnects
+            pass
 
     async def receive_from_frontend() -> None:
         nonlocal segment_index
@@ -61,16 +298,24 @@ async def ws_handler(websocket: WebSocket) -> None:
                     message = await websocket.receive_json()
                     mtype = message.get("type") if isinstance(message, dict) else None
                 except WebSocketDisconnect:
+                    try:
+                        print("WS: client disconnected; stopping receive loop")
+                    except Exception:
+                        pass
                     break
                 except RuntimeError:
                     # Starlette raises if receive() is called after disconnect
+                    try:
+                        print("WS: RuntimeError on receive after disconnect; stopping loop")
+                    except Exception:
+                        pass
                     break
                 except Exception as e:
                     print(f"WS error receive_json: {e}")
                     break
 
                 if mtype == "hello":
-                    await websocket.send_json({"type": "ready"})
+                    await safe_send_json({"type": "ready"})
                     try:
                         await sse_publish({"type": "ready"})
                     except Exception:
@@ -78,21 +323,21 @@ async def ws_handler(websocket: WebSocket) -> None:
                     continue
                 if mtype == "ping":
                     ts = now_ms()
-                    await websocket.send_json({"type": "pong", "ts": ts})
+                    await safe_send_json({"type": "pong", "ts": ts})
                     try:
                         await sse_publish({"type": "pong", "ts": ts})
                     except Exception:
                         pass
                     continue
                 if mtype == "ping_start":
-                    await websocket.send_json({"type": "ack", "what": "start"})
+                    await safe_send_json({"type": "ack", "what": "start"})
                     try:
                         await sse_publish({"type": "ack", "what": "start"})
                     except Exception:
                         pass
                     continue
                 if mtype == "ping_stop":
-                    await websocket.send_json({"type": "ack", "what": "stop"})
+                    await safe_send_json({"type": "ack", "what": "stop"})
                     try:
                         await sse_publish({"type": "ack", "what": "stop"})
                     except Exception:
@@ -100,7 +345,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                     continue
                 if mtype == "transcribe":
                     transcribe_enabled = bool(message.get("enabled", False))
-                    await websocket.send_json({"type": "ack", "what": "transcribe", "enabled": transcribe_enabled})
+                    await safe_send_json({"type": "ack", "what": "transcribe", "enabled": transcribe_enabled})
                     try:
                         await sse_publish({"type": "ack", "what": "transcribe", "enabled": transcribe_enabled})
                     except Exception:
@@ -111,13 +356,13 @@ async def ws_handler(websocket: WebSocket) -> None:
                             "ready": bool(app_state.speech_client and app_state.streaming_config),
                             "info": app_state.auth_info or {}
                         }
-                        await websocket.send_json(auth_msg)
+                        await safe_send_json(auth_msg)
                         try:
                             await sse_publish(auth_msg)
                         except Exception:
                             pass
                         status_msg = {"type": "status", "message": "Transcribing... awaiting results"}
-                        await websocket.send_json(status_msg)
+                        await safe_send_json(status_msg)
                         try:
                             await sse_publish(status_msg)
                         except Exception:
@@ -147,7 +392,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                             sf.write(decoded_full)
                         saved_url = f"/static/recordings/{server_filename}"
                         saved = {"type": "saved", "url": saved_url, "size": len(decoded_full)}
-                        await websocket.send_json(saved)
+                        await safe_send_json(saved)
                         try:
                             await sse_publish(saved)
                         except Exception:
@@ -166,7 +411,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                         except Exception:
                             pass
                         saved = {"type": "saved", "url": saved_url, "size": size_bytes}
-                        await websocket.send_json(saved)
+                        await safe_send_json(saved)
                         try:
                             await sse_publish(saved)
                         except Exception:
@@ -188,6 +433,22 @@ async def ws_handler(websocket: WebSocket) -> None:
                         seg_url = f"/static/recordings/session_{session_ts}/segment_{segment_index}.{seg_ext}"
                         client_id = message.get("id")
                         client_ts = message.get("ts") or now_ms()
+                        # Insert into in-memory segment table and get segment_id
+                        try:
+                            row = insert_segment(
+                                recording_id=str(session_ts),
+                                idx=segment_index,
+                                url=seg_url,
+                                mime=client_mime,
+                                size=len(seg_bytes),
+                                client_id=client_id,
+                                ts=client_ts,
+                                start_ms=client_ts,
+                                end_ms=(client_ts + int(message.get("duration_ms") or 10000))
+                            )
+                            segment_id = row.get("segment_id")
+                        except Exception:
+                            segment_id = None
                         ev = {
                             "type": "segment_saved",
                             "idx": segment_index,
@@ -197,9 +458,10 @@ async def ws_handler(websocket: WebSocket) -> None:
                             "status": "ws_ok",
                             "ext": seg_ext,
                             "mime": client_mime,
-                            "size": len(seg_bytes)
+                            "size": len(seg_bytes),
+                            "segment_id": segment_id
                         }
-                        await websocket.send_json(ev)
+                        await safe_send_json(ev)
                         try:
                             await sse_publish(ev)
                         except Exception:
@@ -213,16 +475,16 @@ async def ws_handler(websocket: WebSocket) -> None:
                                         print(f"WS google idx={idx} text_len={len(text or '')}")
                                     except Exception:
                                         pass
-                                    msg = {"type": "segment_transcript_google", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
-                                    await websocket.send_json(msg)
                                     try:
-                                        await sse_publish(msg)
+                                        if ev.get("segment_id") and text:
+                                            append_transcript(int(ev["segment_id"]), "google", text)
                                     except Exception:
                                         pass
-                                    msg2 = {"type": "segment_transcript", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
-                                    await websocket.send_json(msg2)
+                                    # Emit only provider-specific event to avoid duplicates on the frontend
+                                    msg = {"type": "segment_transcript_google", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts, "segment_id": ev.get("segment_id")}
+                                    await safe_send_json(msg)
                                     try:
-                                        await sse_publish(msg2)
+                                        await sse_publish(msg)
                                     except Exception:
                                         pass
                                 except Exception as e:
@@ -260,8 +522,13 @@ async def ws_handler(websocket: WebSocket) -> None:
                                         print(f"WS vertex idx={idx} text_len={len(text or '')}")
                                     except Exception:
                                         pass
-                                    msg = {"type": "segment_transcript_vertex", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
-                                    await websocket.send_json(msg)
+                                    try:
+                                        if ev.get("segment_id") and text:
+                                            append_transcript(int(ev["segment_id"]), "vertex", text)
+                                    except Exception:
+                                        pass
+                                    msg = {"type": "segment_transcript_vertex", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts, "segment_id": ev.get("segment_id")}
+                                    await safe_send_json(msg)
                                     try:
                                         await sse_publish(msg)
                                     except Exception:
@@ -269,62 +536,38 @@ async def ws_handler(websocket: WebSocket) -> None:
                                 except Exception as e:
                                     print(f"WS error vertex segment: {e}")
                             asyncio.create_task(do_vertex(segment_index, seg_bytes, seg_ext))
-                        # Dispatch Gemini API per-segment if available (mirror /test_transcribe method)
+                        # Dispatch Gemini using the centralized helper (identical to /test_transcribe path)
                         if transcribe_enabled and service_enabled("gemini") and getattr(app_state, 'gemini_model', None) is not None:
                             print(f"WS dispatch: gemini idx={segment_index} ext={seg_ext} bytes={len(seg_bytes)}")
                             async def do_gemini(idx: int, b: bytes, ext: str):
                                 try:
-                                    async with gemini_lock:
-                                        order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
-                                        resp = None
-                                        last_exc = None
-                                        for mt in order:
-                                            # Retry a couple of times per mime to avoid transient 500s
-                                            for attempt in range(2):
-                                                try:
-                                                    print(f"WS gemini calling generate_content mt={mt} idx={idx} bytes={len(b)} attempt={attempt+1}")
-                                                    resp = app_state.gemini_model.generate_content([
-                                                        {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
-                                                        {"mime_type": mt, "data": b}
-                                                    ])
-                                                    break
-                                                except Exception as ie:
-                                                    last_exc = ie
-                                                    print(f"WS gemini generate_content failed mt={mt} attempt={attempt+1}: {ie}")
-                                                    await asyncio.sleep(0.25)
-                                            if resp is not None:
-                                                break
-                                        if resp is None and last_exc:
-                                            raise last_exc
-                                        text = extract_text_from_gemini_response(resp)
-                                        try:
-                                            sz = 0
-                                            try:
-                                                if hasattr(resp, 'to_dict'):
-                                                    sz = len(str(resp.to_dict()))
-                                                else:
-                                                    sz = len(str(resp))
-                                            except Exception:
-                                                pass
-                                            print(f"WS gemini done idx={idx} resp_len={sz} text_len={len(text)}")
-                                        except Exception:
-                                            pass
-                                        try:
-                                            print(f"WS gemini transcript idx={idx} text_len={len(text or '')}")
-                                        except Exception:
-                                            pass
-                                        msg = {"type": "segment_transcript_gemini", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
-                                        await websocket.send_json(msg)
-                                        try:
-                                            await sse_publish(msg)
-                                        except Exception:
-                                            pass
+                                    mime_hint = "audio/ogg" if ext == "ogg" else "audio/webm"
+                                    text = tx_gemini(b, mime_hint)
+                                    try:
+                                        print(f"WS gemini transcript idx={idx} text_len={len(text or '')}")
+                                    except Exception:
+                                        pass
+                                    try:
+                                        if text:
+                                            print(f"WS gemini text idx={idx} snippet={(text[:120]+'...') if len(text)>120 else text}")
+                                    except Exception:
+                                        pass
+                                    try:
+                                        if ev.get("segment_id") and text:
+                                            append_transcript(int(ev["segment_id"]), "gemini", text)
+                                    except Exception:
+                                        pass
+                                    msg = {"type": "segment_transcript_gemini", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts, "segment_id": ev.get("segment_id")}
+                                    await safe_send_json(msg)
+                                    try:
+                                        await sse_publish(msg)
+                                    except Exception:
+                                        pass
                                 except Exception as e:
                                     print(f"WS error gemini segment: {e}")
-                                    # Emit an error event so frontend can log and advance
                                     try:
-                                        err_msg = {"type": "segment_transcript_gemini", "idx": idx, "error": str(e), "id": client_id, "ts": client_ts}
-                                        await websocket.send_json(err_msg)
+                                        err_msg = {"type": "segment_transcript_gemini", "idx": idx, "error": str(e), "id": client_id, "ts": client_ts, "segment_id": ev.get("segment_id")}
+                                        await safe_send_json(err_msg)
                                         try:
                                             await sse_publish(err_msg)
                                         except Exception:
@@ -344,8 +587,13 @@ async def ws_handler(websocket: WebSocket) -> None:
                                         print(f"WS aws idx={idx} text_len={len(text or '')}")
                                     except Exception:
                                         pass
-                                    msg = {"type": "segment_transcript_aws", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts}
-                                    await websocket.send_json(msg)
+                                    try:
+                                        if ev.get("segment_id") and text:
+                                            append_transcript(int(ev["segment_id"]), "aws", text)
+                                    except Exception:
+                                        pass
+                                    msg = {"type": "segment_transcript_aws", "idx": idx, "transcript": text, "id": client_id, "ts": client_ts, "segment_id": ev.get("segment_id")}
+                                    await safe_send_json(msg)
                                     try:
                                         await sse_publish(msg)
                                     except Exception:
@@ -373,7 +621,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                 else:
                     try:
                         if websocket.application_state != WebSocketState.DISCONNECTED and websocket.client_state != WebSocketState.DISCONNECTED:
-                            await websocket.send_json({"type": "ack"})
+                            await safe_send_json({"type": "ack"})
                     except Exception:
                         break
         finally:
@@ -382,12 +630,7 @@ async def ws_handler(websocket: WebSocket) -> None:
                     server_file.close()
             except Exception:
                 pass
-            # Ensure websocket is closed on server side to prevent further receives after client disconnect
-            try:
-                if websocket.application_state != WebSocketState.DISCONNECTED and websocket.client_state != WebSocketState.DISCONNECTED:
-                    await websocket.close(code=1000)
-            except Exception:
-                pass
+            # Do not force-close here; allow graceful close initiated by client or app shutdown
 
     await receive_from_frontend()
 

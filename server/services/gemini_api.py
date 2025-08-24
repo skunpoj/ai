@@ -36,6 +36,16 @@ def extract_text_from_gemini_response(resp: Any) -> str:
             return txt.strip()
     except Exception:
         pass
+    # Try to expose detailed error information if present
+    try:
+        if hasattr(resp, 'to_dict'):
+            d = resp.to_dict()
+            err = d.get('error') if isinstance(d, dict) else None
+            if isinstance(err, dict):
+                code = err.get('code'); status = err.get('status'); msg = err.get('message')
+                raise RuntimeError(f"gemini_error code={code} status={status} message={msg}")
+    except Exception:
+        pass
     # New google.genai path
     txt2 = _from_candidates(resp)
     if txt2:
