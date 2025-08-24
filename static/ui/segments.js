@@ -77,13 +77,13 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   if (existing) {
     try { existing.setAttribute('data-start-ms', String(startMs)); } catch(_) {}
     try {
-      const audioCell = existing.children && existing.children[0] ? existing.children[0] : null;
-      const timeCell = existing.children && existing.children[1] ? existing.children[1] : null;
-      if (audioCell) {
+      const timeCell = existing.querySelector('td[data-col="time"]');
+      const playbackCell = existing.lastElementChild;
+      if (playbackCell) {
         const sizeLabel = data.size ? `(${(data.size/1024).toFixed(0)} KB)` : '';
         const mime = (data.url && data.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
         const sizeHtml = sizeLabel ? `<small id="segsize-${record.id}-${segIndex}" data-load-full="${data.url || ''}" style="cursor:pointer">${sizeLabel}</small>` : '';
-        audioCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
+        playbackCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
       }
       if (timeCell) {
         const startStr = formatElapsed(startMs - (record.startTs || startMs));
@@ -96,17 +96,12 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   const tr = document.createElement('tr');
   tr.id = rowId;
   try { tr.setAttribute('data-start-ms', String(startMs)); } catch(_) {}
+  try { tr.setAttribute('data-idx', String(segIndex)); } catch(_) {}
   tr.setAttribute('hx-post', '/render/segment_row');
   tr.setAttribute('hx-trigger', 'refresh-row');
   tr.setAttribute('hx-target', 'this');
   tr.setAttribute('hx-swap', 'outerHTML');
   tr.setAttribute('hx-vals', JSON.stringify({ record: JSON.stringify(record), idx: segIndex }));
-  const audioCell = document.createElement('td');
-  audioCell.style.padding = '0';
-  const sizeLabel = data.size ? `(${(data.size/1024).toFixed(0)} KB)` : '';
-  const mime = (data.url && data.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
-  const sizeHtml = sizeLabel ? `<small id="segsize-${record.id}-${segIndex}" data-load-full="${data.url || ''}" style="cursor:pointer">${sizeLabel}</small>` : '';
-  audioCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
   const timeCell = document.createElement('td');
   timeCell.style.padding = '0';
   try { timeCell.style.whiteSpace = 'nowrap'; } catch(_) {}
@@ -114,7 +109,6 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
   const startStr = formatElapsed(startMs - (record.startTs || startMs));
   const endStr = formatElapsed(endMs - (record.startTs || endMs));
   timeCell.textContent = `${startStr} – ${endStr}`;
-  tr.appendChild(audioCell);
   tr.appendChild(timeCell);
   try {
     const services = await getServicesCached();
@@ -126,7 +120,23 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
       tr.appendChild(td);
     });
   } catch(_) {}
-  // Insert sorted by startMs descending among existing segment rows (segrow-/segtemp-)
+  // Translation cell placeholder
+  try {
+    const td = document.createElement('td');
+    td.style.padding = '0';
+    td.setAttribute('data-svc', 'translation');
+    td.textContent = '';
+    tr.appendChild(td);
+  } catch(_) {}
+  // Playback cell last
+  const audioCell = document.createElement('td');
+  audioCell.style.padding = '0';
+  const sizeLabel = data.size ? `(${(data.size/1024).toFixed(0)} KB)` : '';
+  const mime = (data.url && data.url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
+  const sizeHtml = sizeLabel ? `<small id="segsize-${record.id}-${segIndex}" data-load-full="${data.url || ''}" style="cursor:pointer">${sizeLabel}</small>` : '';
+  audioCell.innerHTML = `${data.url ? `<audio controls><source src="${data.url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
+  tr.appendChild(audioCell);
+  // Insert sorted by explicit segment index when available; fallback to startMs ascending
   try {
     const children = Array.from(tbody.children);
     const pendingTop = document.getElementById(`segpending-${record.id}`);
@@ -136,8 +146,16 @@ export async function prependSegmentRow(record, segIndex, data, startMs, endMs) 
       if (!child || !(child.id || '').length) continue;
       if (pendingTop && child === pendingTop) continue;
       if (!/^seg(row|temp)-/.test(child.id)) continue;
-      const other = Number(child.getAttribute('data-start-ms') || '0');
-      if (other < startVal) { tbody.insertBefore(tr, child); inserted = true; break; }
+      // Prefer ordering by data-idx when present on both rows
+      const otherIdxAttr = child.getAttribute('data-idx');
+      if (otherIdxAttr !== null && !Number.isNaN(Number(otherIdxAttr))) {
+        const otherIdx = Number(otherIdxAttr);
+        // Descending order (newest first)
+        if (!Number.isNaN(segIndex) && otherIdx < segIndex) { tbody.insertBefore(tr, child); inserted = true; break; }
+      } else {
+        const other = Number(child.getAttribute('data-start-ms') || '0');
+        if (other < startVal) { tbody.insertBefore(tr, child); inserted = true; break; }
+      }
     }
     if (!inserted) {
       if (pendingTop && pendingTop.parentElement === tbody) {
@@ -161,14 +179,9 @@ export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs
     // Tag so caller can revoke object URL once server row replaces this temp row
     if (url) try { tr.setAttribute('data-temp-url', url); } catch(_) {}
     try { tr.setAttribute('data-start-ms', String(startMs)); } catch(_) {}
+    try { tr.setAttribute('data-idx', String(record && typeof record._compatIdx === 'number' ? record._compatIdx : -1)); } catch(_) {}
     tr.setAttribute('data-client-ts', String(clientTs));
     try { tr.setAttribute('data-client-id', String(clientTs)); } catch(_) {}
-    const audioCell = document.createElement('td');
-    audioCell.style.padding = '0';
-    const kb = size ? `(${(size/1024).toFixed(0)} KB)` : '';
-    const mime = (url && url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
-    const sizeHtml = kb ? `<small style="cursor:default">${kb}</small>` : '';
-    audioCell.innerHTML = `${url ? `<audio controls><source src="${url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
     const timeCell = document.createElement('td');
     timeCell.style.padding = '0';
     try { timeCell.style.whiteSpace = 'nowrap'; } catch(_) {}
@@ -176,7 +189,6 @@ export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs
     const startStr = formatElapsed(startMs - (record.startTs || startMs));
     const endStr = formatElapsed(endMs - (record.startTs || endMs));
     timeCell.textContent = `${startStr} – ${endStr}`;
-    tr.appendChild(audioCell);
     tr.appendChild(timeCell);
     // Append placeholder provider cells to keep columns aligned
     try {
@@ -188,9 +200,23 @@ export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs
           td.textContent = 'transcribing…';
           tr.appendChild(td);
         });
+        // Translation placeholder
+        const ttd = document.createElement('td');
+        ttd.style.padding = '0';
+        ttd.setAttribute('data-svc', 'translation');
+        ttd.textContent = '';
+        tr.appendChild(ttd);
       }).catch(() => {});
     } catch(_) {}
-    // Insert sorted by startMs descending among existing segment rows
+    // Playback cell last
+    const audioCell = document.createElement('td');
+    audioCell.style.padding = '0';
+    const kb = size ? `(${(size/1024).toFixed(0)} KB)` : '';
+    const mime = (url && url.toLowerCase().endsWith('.ogg')) ? 'audio/ogg' : 'audio/webm';
+    const sizeHtml = kb ? `<small style=\"cursor:default\">${kb}</small>` : '';
+    audioCell.innerHTML = `${url ? `<audio controls><source src="${url}" type="${mime}"></audio>` : ''} ${sizeHtml}`;
+    tr.appendChild(audioCell);
+    // Insert sorted by explicit index when present, otherwise by startMs ascending
     try {
       const children = Array.from(tbody.children);
       const pendingTop = document.getElementById(`segpending-${record.id}`);
@@ -200,8 +226,14 @@ export function insertTempSegmentRow(record, clientTs, url, size, startMs, endMs
         if (!child || !(child.id || '').length) continue;
         if (pendingTop && child === pendingTop) continue;
         if (!/^seg(row|temp)-/.test(child.id)) continue;
-        const other = Number(child.getAttribute('data-start-ms') || '0');
-        if (other < startVal) { tbody.insertBefore(tr, child); inserted = true; break; }
+        const otherIdxAttr = child.getAttribute('data-idx');
+        if (otherIdxAttr !== null && !Number.isNaN(Number(otherIdxAttr)) && !Number.isNaN(Number(tr.getAttribute('data-idx')))) {
+          // Descending by index (newest first)
+          if (Number(otherIdxAttr) < Number(tr.getAttribute('data-idx'))) { tbody.insertBefore(tr, child); inserted = true; break; }
+        } else {
+          const other = Number(child.getAttribute('data-start-ms') || '0');
+          if (other < startVal) { tbody.insertBefore(tr, child); inserted = true; break; }
+        }
       }
       if (!inserted) {
         if (pendingTop && pendingTop.parentElement === tbody) {

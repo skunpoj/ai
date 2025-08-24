@@ -12,8 +12,15 @@ from server.views.settings import build_settings_modal
 from server.state import app_state
 from server.services.registry import list_services as registry_list, set_service_enabled
 from starlette.responses import HTMLResponse
+from starlette.responses import JSONResponse
 import hashlib
 import json as _json
+import threading
+import subprocess
+import shlex
+import os
+import time
+from server.services.gemini_api import extract_text_from_gemini_response
 
 
 def build_segment_modal() -> Any:
@@ -33,7 +40,9 @@ th, td { padding:0; }
 hr { display:none; }
 /* Hide segment metadata (download + size) when toggled off */
 .hide-segmeta tbody[id^="segtbody-"] small[id^="segsize-"],
-.hide-segmeta tbody[id^="segtbody-"] a[download][data-load-full] {
+.hide-segmeta tbody[id^="segtbody-"] a[download][data-load-full],
+.hide-segmeta small[data-load-full],
+.hide-segmeta a[download][data-load-full] {
   display: none !important;
 }
 /* Hide combined Time column when toggled off (separate toggle) */
@@ -77,6 +86,9 @@ hr { display:none; }
                 "try { const cg = document.getElementById('cred_google'); if (cg) { const i = window.GOOGLE_AUTH_INFO||{}; cg.textContent = `Google: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}`; } } catch(_) {}\n"
                 "try { const cv = document.getElementById('cred_vertex'); if (cv) { const i = window.GOOGLE_AUTH_INFO||{}; cv.textContent = `Vertex: ${window.GOOGLE_AUTH_READY ? 'ready' : 'not ready'}${i.project_id ? ' · ' + i.project_id : ''}`; } } catch(_) {}"
             ),
+            Script(
+                f"window.APP_FLAGS = window.APP_FLAGS || {{}}; window.APP_FLAGS.enable_translation = { 'true' if getattr(app_state, 'enable_translation', False) else 'false' };"
+            ),
             # New modular frontend controller replaces legacy main.js
             Script(src="/static/app/app.js", type="module")
         )
@@ -87,6 +99,77 @@ def services_json() -> List[Dict[str, Any]]:
     return registry_list()
 
 
+# --- Async remux job management (in-memory) ---
+_remux_jobs: Dict[str, Dict[str, Any]] = {}
+
+
+def _safe_id(recording_id: str) -> str:
+    return ''.join([c if c.isalnum() or c in ('-', '_') else '_' for c in str(recording_id or '')])
+
+
+def _run_ffmpeg_concat(session_dir: str, out_path: str) -> None:
+    list_path = os.path.join(session_dir, 'list.txt')
+    with open(list_path, 'w', encoding='utf-8') as lf:
+        for name in sorted(os.listdir(session_dir)):
+            if name.startswith('segment_') and (name.endswith('.ogg') or name.endswith('.webm')):
+                lf.write(f"file '{os.path.join(session_dir, name).replace('\\\\','/').replace('\\','/')}'\n")
+    cmd = f"ffmpeg -y -f concat -safe 0 -i {shlex.quote(list_path)} -c copy {shlex.quote(out_path)}"
+    r = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    if r.returncode != 0:
+        cmd2 = f"ffmpeg -y -f concat -safe 0 -i {shlex.quote(list_path)} -c:a libopus -b:a 64k {shlex.quote(out_path)}"
+        r2 = subprocess.run(cmd2, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+        if r2.returncode != 0:
+            raise RuntimeError('ffmpeg_failed')
+
+
+def _start_remux_job(recording_id: str) -> str:
+    job_id = f"remux_{int(time.time()*1000)}_{os.getpid()}"
+    root = os.path.join(os.path.abspath('static'), 'recordings')
+    safe_rec_id = _safe_id(recording_id)
+    session_dir = os.path.join(root, f'session_{safe_rec_id}')
+    first = next((n for n in sorted(os.listdir(session_dir)) if n.startswith('segment_') and (n.endswith('.ogg') or n.endswith('.webm'))), None)
+    if not first:
+        raise RuntimeError('no_segments')
+    out_ext = '.ogg' if first.endswith('.ogg') else '.webm'
+    out_path = os.path.join(root, f'session_{safe_rec_id}_full{out_ext}')
+    _remux_jobs[job_id] = {"status": "queued", "url": None, "error": None}
+
+    def worker():
+        try:
+            _remux_jobs[job_id]["status"] = "running"
+            _run_ffmpeg_concat(session_dir, out_path)
+            url = f"/static/recordings/session_{safe_rec_id}_full{out_ext}"
+            _remux_jobs[job_id]["status"] = "done"
+            _remux_jobs[job_id]["url"] = url
+        except Exception as e:
+            _remux_jobs[job_id]["status"] = "error"
+            _remux_jobs[job_id]["error"] = str(e)
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    return job_id
+
+
+def export_full_async(recording_id: str = '') -> Any:
+    try:
+        if not recording_id:
+            return JSONResponse({"ok": False, "error": "missing_recording_id"})
+        job_id = _start_remux_job(recording_id)
+        return JSONResponse({"ok": True, "job_id": job_id})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"server_error: {e}"})
+
+
+def export_status(job_id: str = '') -> Any:
+    try:
+        job = _remux_jobs.get(job_id)
+        if not job:
+            return JSONResponse({"ok": False, "error": "job_not_found"})
+        return JSONResponse({"ok": True, **job})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"server_error: {e}"})
+
+
 def build_panel_html(record: Dict[str, Any]) -> str:
     """Build the HTML for the panel given a record dict."""
     services = [s for s in services_json() if s.get("enabled")]
@@ -95,7 +178,8 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         return Td(txt)
 
     # Build top meta table to ensure consistent left padding with segment rows
-    src_url = record.get("serverUrl") or record.get("audioUrl")
+    # Show player only for server-side full file, not local client preview
+    src_url = record.get("serverUrl")
     player_bits: List[Any] = []
     if src_url:
         try:
@@ -152,8 +236,11 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     )
 
     # Provider table (one column per enabled service); live text filled via WS
-    full_header = Tr(*[Th(s["label"], style="border:0;padding:0") for s in services])
+    # Add Translation column header at end
+    full_header = Tr(*[Th(s["label"], style="border:0;padding:0") for s in services], Th("Translation", style="border:0;padding:0"))
     full_cells: List[Any] = [Td(((record.get("fullAppend", {}) or {}).get(s["key"], "")), data_svc=s["key"]) for s in services]
+    # Placeholder translation cell for full row (can be empty or computed later)
+    full_cells.append(Td(((record.get("fullAppend", {}) or {}).get("translation", "")), data_svc="translation"))
     provider_table = Table(
         THead(full_header),
         TBody(Tr(*full_cells, id=f"fullrow-{record.get('id','')}") ),
@@ -176,6 +263,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     seg_header = Tr(
         Th("Time", style="border:0;padding:0", data_col="time"),
         *[Th(s["label"], style="border:0;padding:0") for s in services],
+        Th("Translation", style="border:0;padding:0"),
         Th("Playback", style="border:0;padding:0")
     )
     seg_rows: List[Any] = []
@@ -260,6 +348,10 @@ def _render_segment_row(record: Dict[str, Any], services: List[Dict[str, Any]], 
         except Exception:
             pass
         svc_cells.append(Td(txt or "", data_svc=s["key"]))
+    # Translation cell (computed client/server via Gemini)
+    trans_arr = (transcripts.get("translation", []) or []) if isinstance(transcripts, dict) else []
+    trans_txt = trans_arr[idx] if idx < len(trans_arr) else ""
+    svc_cells.append(Td(trans_txt or "", data_svc="translation"))
     import json as __json
     # Playback last
     play_kids: List[Any] = []
@@ -334,11 +426,44 @@ def render_full_row(req) -> Any:
     try:
         services = [s for s in services_json() if s.get("enabled")]
         full_header = Tr(*[Th(s["label"]) for s in services])
-        # Provider table shows only provider texts; player/icon/size belong in segments top row on stop
+        # Compute summaries using Gemini if configured
+        summaries: Dict[str, str] = {}
+        if getattr(app_state, 'enable_summarization', True) and app_state.gemini_model is not None:
+            for s in services:
+                key = s["key"]
+                full_text = ((record.get("fullAppend", {}) or {}).get(key, ""))
+                # Fallback: if fullAppend is empty, derive from per-segment transcripts
+                if not full_text:
+                    try:
+                        seg_arr = ((record.get("transcripts", {}) or {}).get(key, []) or [])
+                        if isinstance(seg_arr, list):
+                            full_text = " ".join([str(x) for x in seg_arr if x])
+                    except Exception:
+                        full_text = ""
+                if not full_text:
+                    summaries[key] = ""
+                    continue
+                try:
+                    prompt = (app_state.full_summary_prompt or "Summarize the transcription.")
+                    resp = app_state.gemini_model.generate_content([
+                        {"text": prompt},
+                        {"text": full_text}
+                    ])
+                    summaries[key] = extract_text_from_gemini_response(resp) or ""
+                except Exception:
+                    summaries[key] = full_text
+        # Build cells: during recording show appended text; after stop show summary when enabled
         full_cells: List[Any] = []
         for s in services:
-            val = ((record.get("fullAppend", {}) or {}).get(s["key"], ""))
-            full_cells.append(Td(val, data_svc=s["key"]))
+            key = s["key"]
+            show_summary = bool(getattr(app_state, 'enable_summarization', True)) and bool(record.get('stopTs'))
+            if show_summary:
+                val = summaries.get(key)
+                if val is None:
+                    val = ((record.get("fullAppend", {}) or {}).get(key, ""))
+            else:
+                val = ((record.get("fullAppend", {}) or {}).get(key, ""))
+            full_cells.append(Td(val, data_svc=key))
         full_row = Tr(*full_cells, id=f"fullrow-{record.get('id','')}")
         table = Table(THead(full_header), TBody(full_row), border="0", cellpadding="4", cellspacing="0", style="border-collapse:collapse; border:0; width:100%")
         html = str(table)

@@ -50,6 +50,19 @@ class AppState:
         self.gemini_api_key_masked: str = ""
         self.vertex_client: Optional[object] = None
         self.vertex_model_name: str = os.environ.get("VERTEX_GEMINI_MODEL", "gemini-2.5-flash")
+        # Prompt used to summarize full transcripts per provider
+        self.full_summary_prompt: str = (
+            "Summarize the following transcription into concise bullet points capturing key points, decisions, and action items. "
+            "Avoid filler. Preserve factual content."
+        )
+        # Translation settings
+        self.translation_prompt: str = (
+            "Translate the following text into the TARGET language, preserving meaning and names."
+        )
+        self.translation_lang: str = os.environ.get("TRANSLATION_LANG", "en")
+        # Feature flags
+        self.enable_summarization: bool = True
+        self.enable_translation: bool = False
 
     def init_google_speech(self) -> None:
         """Initialize Google STT client and masked auth info from env JSON."""
@@ -228,5 +241,29 @@ class AppState:
                 print("GOOGLE_CLOUD_PROJECT not set and could not infer; skipping Vertex AI Gemini.")
 
 app_state = AppState()
+
+
+def set_full_summary_prompt(prompt: str) -> None:
+    try:
+        if isinstance(prompt, str) and prompt.strip():
+            app_state.full_summary_prompt = prompt.strip()
+    except Exception:
+        pass
+
+
+def set_translation_prompt(prompt: str) -> None:
+    try:
+        if isinstance(prompt, str) and prompt.strip():
+            app_state.translation_prompt = prompt.strip()
+    except Exception:
+        pass
+
+
+def set_translation_lang(lang: str) -> None:
+    try:
+        if isinstance(lang, str) and lang.strip():
+            app_state.translation_lang = lang.strip()
+    except Exception:
+        pass
 
 

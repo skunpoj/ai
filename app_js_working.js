@@ -1,7 +1,8 @@
 import { getServices, getServicesCached } from '/static/ui/services.js';
-import { ensureTab as ensureUITab, activateTab as activateUITab, setElapsed as setTabElapsed, finalizeTab } from '/static/ui/tabs.js';
+import { ensureTab as ensureUITab, activateTab as activateUITab } from '/static/ui/tabs.js';
 import { renderRecordingPanel as renderPanel } from '/static/ui/renderers.js';
-// WebSocket helpers removed; HTTP-only
+import { sendJSON, ensureOpenSocket } from '/static/ui/ws.js';
+import { createWsMessageHandler } from '/static/ui/ws_handlers.js';
 import { showPendingCountdown, prependSegmentRow } from '/static/ui/segments.js';
 import { acquireWakeLock, releaseWakeLock, initWakeLockVisibilityReacquire } from '/static/app/wake_lock.js';
 import { createMediaRecorderWithFallback, safelyStopStream } from '/static/app/recorder_utils.js';
@@ -25,17 +26,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let transcribePending = false;
     const USE_TIMESLICE = false;
     const transcribeTimeouts = new Map();
-    // Fixed segment duration per recording; captured at Start Record
-    let activeSegmentMs = null;
 
     // UI
     const startRecordingButton = document.getElementById('startRecording');
     const stopRecordingButton = document.getElementById('stopRecording');
     const startTranscribeButton = document.getElementById('startTranscribe');
     const stopTranscribeButton = document.getElementById('stopTranscribe');
-    const toggleSegMetaToolbar = document.getElementById('toggleSegMetaToolbar');
-    const toggleTimeColToolbar = document.getElementById('toggleTimeColToolbar');
-    const showLocalPreviewToggle = document.getElementById('showLocalPreviewToggle');
     const autoTranscribeToggle = document.getElementById('autoTranscribeToggle');
     const tabsBar = document.getElementById('recordTabs');
     const panelsHost = document.getElementById('recordPanels');
@@ -43,35 +39,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const openSegmentModalBtn = document.getElementById('openSegmentModal');
     const segmentModal = document.getElementById('segmentModal');
     const okSegmentModalBtn = document.getElementById('okSegmentModal');
-    // WS UI removed
-    const testConnBtn = null;
-    const connStatus = null;
+    const testConnBtn = document.getElementById('testConnection');
+    const connStatus = document.getElementById('connStatus');
     const testAudio = document.getElementById('testAudio');
-    const settingsTabGeneralBtn = document.getElementById('settingsTabGeneralBtn');
-    const settingsTabSumBtn = document.getElementById('settingsTabSumBtn');
-    const settingsTabTransBtn = document.getElementById('settingsTabTransBtn');
-    const settingsTabAdvBtn = document.getElementById('settingsTabAdvBtn');
-    const settingsTabContentGeneral = document.getElementById('settingsTabContentGeneral');
-    const settingsTabContentSum = document.getElementById('settingsTabContentSum');
-    const settingsTabContentTrans = document.getElementById('settingsTabContentTrans');
-    const settingsTabContentAdv = document.getElementById('settingsTabContentAdv');
     const uploadFullToggle = document.getElementById('uploadFullToggle');
     const exportFullToggle = document.getElementById('exportFullToggle');
     let uploadFullOnStop = false; // default OFF
     let exportFullOnStop = false; // default OFF
-    let showLocalPreview = true; // default ON by default; can be toggled in Settings
     try { if (uploadFullToggle) { uploadFullOnStop = !!uploadFullToggle.checked; uploadFullToggle.addEventListener('change', () => { uploadFullOnStop = !!uploadFullToggle.checked; }); } } catch(_) {}
     try { if (exportFullToggle) { exportFullOnStop = !!exportFullToggle.checked; exportFullToggle.addEventListener('change', () => { exportFullOnStop = !!exportFullToggle.checked; }); } } catch(_) {}
-    try { if (showLocalPreviewToggle) { showLocalPreview = !!showLocalPreviewToggle.checked; showLocalPreviewToggle.addEventListener('change', async () => { showLocalPreview = !!showLocalPreviewToggle.checked; if (currentRecording) { currentRecording.useLocalPreview = showLocalPreview; await renderRecordingPanel(currentRecording); } }); } } catch(_) {}
     const testUpload = document.getElementById('testUpload');
     const testRecord2s = document.getElementById('testRecord2s');
     const testRun = document.getElementById('testRun');
-    const testViaWS = null;
+    const testViaWS = document.getElementById('testViaWS');
     const testResults = document.getElementById('testResults');
-    const saveSummaryPromptBtn = document.getElementById('saveSummaryPrompt');
-    const fullSummaryPromptInput = document.getElementById('fullSummaryPrompt');
-    const translationLangSelect = document.getElementById('translationLang');
-    const translationPromptInput = document.getElementById('translationPrompt');
     let segmentMs = (typeof window !== 'undefined' && typeof window.SEGMENT_MS !== 'undefined') ? window.SEGMENT_MS : 10000;
 
     initWakeLockVisibilityReacquire(() => (!!(mediaRecorder && mediaRecorder.state === 'recording') || !!segmentLoopActive));
@@ -81,61 +62,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function ensureRecordingTab(record) { if (!tabsBar || !panelsHost) return; ensureUITab(tabsBar, panelsHost, record); }
     async function renderRecordingPanel(record) { ensureRecordingTab(record); try { await renderPanel(record); } catch(_) {} }
-
-    // Elapsed timer while recording
-    let elapsedTimerId = null;
-    function startElapsedTimer(record) {
-        try { if (elapsedTimerId) clearInterval(elapsedTimerId); } catch(_) {}
-        elapsedTimerId = setInterval(() => {
-            try {
-                const sec = Math.max(0, Math.round((Date.now() - (record.startTs || Date.now()))/1000));
-                setTabElapsed(tabsBar, record.id, sec);
-            } catch(_) {}
-        }, 1000);
-    }
-    function stopElapsedTimer(record) {
-        try { if (elapsedTimerId) { clearInterval(elapsedTimerId); elapsedTimerId = null; } } catch(_) {}
-        try { finalizeTab(tabsBar, record); } catch(_) {}
-    }
-
-    // Async remux polling
-    async function startRemuxAsync(record) {
-        try {
-            const recId = String((record && record.startTs) || Date.now());
-            const r = await fetch('/export_full_async', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ recording_id: recId }) });
-            const j = await r.json();
-            if (!(j && j.ok && j.job_id)) return;
-            const jobId = j.job_id;
-            const statusEl = document.getElementById(`fullstatus-${record.id}`) || (function(){ const d=document.createElement('div'); d.id=`fullstatus-${record.id}`; d.textContent='Exporting full…'; const panel=document.getElementById(`panel-${record.id}`); if(panel) panel.prepend(d); return d; })();
-            let tries = 0;
-            const poll = async () => {
-                try {
-                    const pr = await fetch(`/export_status?job_id=${encodeURIComponent(jobId)}`);
-                    const pj = await pr.json();
-                    if (pj && pj.ok) {
-                        if (pj.status === 'done' && pj.url) {
-                            statusEl.textContent = '';
-                            statusEl.style.display = 'none';
-                            // Attach link to meta
-                            const meta = document.getElementById(`recordmeta-${record.id}`);
-                            if (meta) {
-                                const a = document.createElement('a'); a.href = pj.url; a.download=''; a.textContent='Download Full'; a.style.marginLeft='8px';
-                                meta.appendChild(a);
-                            }
-                            return;
-                        } else if (pj.status === 'error') {
-                            statusEl.textContent = 'Export failed';
-                            return;
-                        } else {
-                            statusEl.textContent = `Exporting full… (${pj.status})`;
-                        }
-                    }
-                } catch(_) {}
-                if (tries++ < 120) setTimeout(poll, 1000);
-            };
-            poll();
-        } catch(_) {}
-    }
 
     function clearSvcTimeout(recordId, idx, svc) {
         const k = `${recordId}:${idx}:${svc}`;
@@ -148,8 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!isActive) return;
             const services = await getServicesCached();
             const enabled = services.filter(s => s.enabled);
-            const durMs = (typeof activeSegmentMs === 'number' && activeSegmentMs > 0) ? activeSegmentMs : segmentMs;
-            const TIMEOUT_MS = Number(durMs) && Number(durMs) >= 1000 ? Number(durMs) + 500 : 30000;
+            const TIMEOUT_MS = Number(segmentMs) && Number(segmentMs) >= 1000 ? Number(segmentMs) + 500 : 30000;
             enabled.forEach(s => {
                 const k = `${recordId}:${idx}:${s.key}`;
                 if (transcribeTimeouts.has(k)) return;
@@ -180,7 +105,43 @@ document.addEventListener('DOMContentLoaded', () => {
         throw lastErr || new Error('Failed to acquire microphone');
     }
 
-    async function openSocket() { return null; }
+    async function openSocket() {
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return socket;
+        const tryPath = (path) => new Promise((resolve, reject) => {
+            try { if (connStatus) connStatus.innerText = `WebSocket: connecting… ${path}`; } catch(_) {}
+            const ws = ensureOpenSocket(path, (w) => {
+                try { sendJSON(w, { type: 'hello' }); } catch(_) {}
+                try { if (connStatus) connStatus.innerText = `WebSocket: open ${path}`; } catch(_) {}
+                resolve(w);
+            });
+            const wsOnMessage = createWsMessageHandler({
+                onReady: () => { try { if (connStatus) connStatus.innerText = `WebSocket: open ${path}`; } catch(_) {} },
+                onSegmentSaved: (data) => handleSegmentSaved(data),
+                onTranscript: (_svc, data) => handleTranscript(data),
+                onSaved: (data) => handleSaved(data),
+                onPong: (data) => { try { if (connStatus) connStatus.innerText = `WebSocket: pong (${(data && data.ts) || ''}) ${path}`; } catch(_) {} },
+                onAuth: () => {}, onAck: () => {},
+            });
+            ws.onmessage = wsOnMessage;
+            ws.onerror = () => { try { if (connStatus) connStatus.innerText = `WebSocket: error ${path}`; } catch(_) {} };
+            ws.onclose = () => { try { if (connStatus) connStatus.innerText = `WebSocket: closed ${path}`; } catch(_) {} };
+            if (ws.readyState === WebSocket.OPEN) {
+                try { if (connStatus) connStatus.innerText = `WebSocket: open ${path}`; } catch(_) {}
+                resolve(ws);
+            }
+            // Fallback timeout if connecting hangs
+            setTimeout(() => {
+                try {
+                    if (ws.readyState !== WebSocket.OPEN) {
+                        try { ws.close(); } catch(_) {}
+                        reject(new Error(`timeout ${path}`));
+                    }
+                } catch(_) { reject(new Error(`timeout ${path}`)); }
+            }, 2500);
+        });
+        const ws = await tryPath('/ws_stream');
+        socket = ws; return ws;
+    }
 
     function runConnCheckOnce() {
         (async () => {
@@ -221,8 +182,15 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch(_) {}
         })();
     }
-    function startConnAutoCheck() {}
-    function stopConnAutoCheck() {}
+    function startConnAutoCheck() {
+        try { if (connCheckInterval) return; } catch(_) {}
+        // Run immediately and then every 10s
+        runConnCheckOnce();
+        connCheckInterval = setInterval(runConnCheckOnce, 10000);
+    }
+    function stopConnAutoCheck() {
+        try { if (connCheckInterval) { clearInterval(connCheckInterval); connCheckInterval = null; } } catch(_) {}
+    }
 
     async function prepareNewRecording() {
         resetSegmentsState();
@@ -269,7 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
             while (rec.segments.length <= segIndex) rec.segments.push(null);
             const seeded = rec.segments[segIndex] || {};
             const seededStart = (seeded && typeof seeded.startMs === 'number') ? seeded.startMs : ((typeof data.ts === 'number') ? data.ts : Date.now());
-            const seededEnd = (seeded && typeof seeded.endMs === 'number') ? seeded.endMs : (seededStart + (typeof activeSegmentMs === 'number' ? activeSegmentMs : (typeof segmentMs === 'number' ? segmentMs : 10000)));
+            const seededEnd = (seeded && typeof seeded.endMs === 'number') ? seeded.endMs : (seededStart + (typeof segmentMs === 'number' ? segmentMs : 10000));
             rec.segments[segIndex] = { idx: segIndex, url: data.url, mime: data.mime || '', size: data.size || null, ts: data.ts, startMs: seededStart, endMs: seededEnd, clientId: data.id, serverId };
             if (serverId) segmentIdToIndex.set(`${rec.id}:${serverId}`, segIndex);
             // Persist saved info
@@ -339,113 +307,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Controls
-    // Toolbar toggles for Download/Size and Time columns
-    try {
-        if (toggleSegMetaToolbar) toggleSegMetaToolbar.addEventListener('change', () => {
-            try {
-                document.body.classList.toggle('hide-segmeta', !toggleSegMetaToolbar.checked);
-            } catch(_) {}
-        });
-        if (toggleTimeColToolbar) toggleTimeColToolbar.addEventListener('change', () => {
-            try {
-                document.body.classList.toggle('hide-timecol', !toggleTimeColToolbar.checked);
-            } catch(_) {}
-        });
-        // Apply initial state
-        document.body.classList.toggle('hide-segmeta', !(toggleSegMetaToolbar && toggleSegMetaToolbar.checked));
-        document.body.classList.toggle('hide-timecol', !(toggleTimeColToolbar && toggleTimeColToolbar.checked));
-    } catch(_) {}
-
-    // Simple toast
-    function toast(msg) {
-        try {
-            let t = document.getElementById('toast');
-            if (!t) {
-                t = document.createElement('div');
-                t.id = 'toast';
-                t.style.position = 'fixed';
-                t.style.bottom = '14px';
-                t.style.left = '50%';
-                t.style.transform = 'translateX(-50%)';
-                t.style.background = 'rgba(0,0,0,0.85)';
-                t.style.color = '#fff';
-                t.style.padding = '8px 12px';
-                t.style.borderRadius = '6px';
-                t.style.fontSize = '12px';
-                t.style.zIndex = '99999';
-                document.body.appendChild(t);
-            }
-            t.textContent = msg;
-            t.style.display = 'block';
-            setTimeout(() => { try { t.style.display = 'none'; } catch(_) {} }, 1500);
-        } catch(_) {}
-    }
-    // Settings: Save Summary Prompt
-    try {
-        if (saveSummaryPromptBtn && fullSummaryPromptInput) {
-            saveSummaryPromptBtn.addEventListener('click', async () => {
-                try {
-                    const prompt = String(fullSummaryPromptInput.value || '').trim();
-                    if (!prompt) return;
-                    const r = await fetch('/summary_prompt', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ prompt }) });
-                    const j = await r.json().catch(() => ({}));
-                    if (j && j.ok) toast('Summary prompt saved'); else toast('Save failed');
-                } catch(_) {}
-            });
-        }
-    } catch(_) {}
-    // Settings: Save Translation Settings
-    try {
-        const saveBtn = document.getElementById('saveTranslationSettings');
-        if (saveBtn && translationPromptInput && translationLangSelect) {
-            saveBtn.addEventListener('click', async () => {
-                try {
-                    const prompt = String(translationPromptInput.value || '').trim();
-                    const lang = String(translationLangSelect.value || '').trim();
-                    const r = await fetch('/translation_settings', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ prompt, lang }) });
-                    const j = await r.json().catch(() => ({}));
-                    if (j && j.ok) toast('Translation settings saved'); else toast('Save failed');
-                } catch(_) {}
-            });
-        }
-    } catch(_) {}
-    // Settings: Save & Close (fallback to JS to ensure it always works)
-    try {
-        const settingsSaveBtn = document.getElementById('settingsSaveBtn');
-        const settingsForm = document.getElementById('settingsForm');
-        if (settingsSaveBtn && settingsForm) {
-            try { settingsForm.addEventListener('submit', (e) => { try { e.preventDefault(); } catch(_) {} return false; }); } catch(_) {}
-            settingsSaveBtn.addEventListener('click', async () => {
-                try {
-                    const fd = new FormData(settingsForm);
-                    const body = new URLSearchParams();
-                    for (const [k, v] of fd.entries()) {
-                        if (typeof v === 'string') body.append(k, v);
-                        else if (v && typeof v.name === 'string') body.append(k, v.name);
-                    }
-                    const r = await fetch('/settings_bulk', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
-                    if (r && r.ok) toast('Settings saved'); else toast('Save failed');
-                    // Reflect checkbox state to server-backed toggles
-                    try {
-                        const keys = ['google','vertex','gemini','aws'];
-                        for (const k of keys) {
-                            const el = document.getElementById(`svc_${k}`);
-                            if (!el) continue;
-                            await fetch('/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: k, enabled: !!el.checked }) });
-                        }
-                        // Update client flags for conditional UI (e.g., Translation column)
-                        try {
-                            const tr = document.getElementById('enableTranslation');
-                            if (tr) { window.APP_FLAGS = window.APP_FLAGS || {}; window.APP_FLAGS.enable_translation = !!tr.checked; }
-                        } catch(_) {}
-                    } catch(_) {}
-                } catch(_) {}
-                try { if (segmentModal) segmentModal.style.display = 'none'; } catch(_) {}
-                try { stopConnAutoCheck(); } catch(_) {}
-                try { if (currentRecording) await renderRecordingPanel(currentRecording); } catch(_) {}
-            });
-        }
-    } catch(_) {}
     // Ensure sample audio is loaded in settings modal
     try { if (testAudio && !testAudio.src) testAudio.src = '/static/sample.ogg'; } catch(_) {}
     // Auto-connection check every 10s while app is loaded
@@ -480,31 +341,6 @@ document.addEventListener('DOMContentLoaded', () => {
         try { stopConnAutoCheck(); } catch(_) {}
         if (currentRecording) try { await renderRecordingPanel(currentRecording); } catch(_) {}
     });
-
-    // Settings tab switching
-    try {
-        const activate = (which) => {
-            try {
-                settingsTabContentGeneral.style.display = (which==='general')?'block':'none';
-                settingsTabContentSum.style.display = (which==='sum')?'block':'none';
-                settingsTabContentTrans.style.display = (which==='trans')?'block':'none';
-                if (settingsTabContentAdv) settingsTabContentAdv.style.display = (which==='adv')?'block':'none';
-                settingsTabGeneralBtn.style.background = (which==='general')?'#333':'#222';
-                settingsTabGeneralBtn.style.color = (which==='general')?'#fff':'#aaa';
-                settingsTabSumBtn.style.background = (which==='sum')?'#333':'#222';
-                settingsTabSumBtn.style.color = (which==='sum')?'#fff':'#aaa';
-                settingsTabTransBtn.style.background = (which==='trans')?'#333':'#222';
-                settingsTabTransBtn.style.color = (which==='trans')?'#fff':'#aaa';
-                if (settingsTabAdvBtn) { settingsTabAdvBtn.style.background = (which==='adv')?'#333':'#222'; settingsTabAdvBtn.style.color = (which==='adv')?'#fff':'#aaa'; }
-            } catch(_) {}
-        };
-        if (settingsTabGeneralBtn) settingsTabGeneralBtn.addEventListener('click', () => activate('general'));
-        if (settingsTabSumBtn) settingsTabSumBtn.addEventListener('click', () => activate('sum'));
-        if (settingsTabTransBtn) settingsTabTransBtn.addEventListener('click', () => activate('trans'));
-        if (settingsTabAdvBtn) settingsTabAdvBtn.addEventListener('click', () => activate('adv'));
-        // Default to General on open
-        try { activate('general'); } catch(_) {}
-    } catch(_) {}
 
     // Manual connection check
     if (testConnBtn) testConnBtn.addEventListener('click', async () => {
@@ -600,7 +436,52 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Removed WS test
+    // Test via WS: record one segment using same timeslice pipeline and await transcripts
+    if (testViaWS) testViaWS.addEventListener('click', async () => {
+        try {
+            if (testResults) testResults.textContent = 'Testing via WS…';
+            await openSocket();
+            // Lazily enable transcribe before sending first test slice
+            try { if (socket && socket.readyState === WebSocket.OPEN) sendJSON(socket, { type: 'transcribe', enabled: true }); } catch(_) {}
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const ref = { value: '' };
+            const mr = createMediaRecorderWithFallback(stream, ref);
+            const localIdx = 0; // single slice test
+            const startTs = Date.now();
+            const segDur = Number(segmentMs || 10000);
+            let done = false;
+            const onMessage = (ev) => {
+                try {
+                    const m = JSON.parse(ev.data);
+                    if (m && typeof m.idx === 'number' && m.idx === localIdx && /^segment_transcript_/.test(m.type)) {
+                        const svc = (m.type || '').replace('segment_transcript_', '') || '';
+                        const txt = m.transcript || m.error || '';
+                        if (testResults) testResults.textContent = `${svc}: ${txt}`;
+                        done = true;
+                        try { socket.removeEventListener('message', onMessage); } catch(_) {}
+                    }
+                } catch(_) {}
+            };
+            try { socket.addEventListener('message', onMessage); } catch(_) {}
+            mr.ondataavailable = async (e) => {
+                if (!e.data || !e.data.size || done) return;
+                try {
+                    const buf = await e.data.arrayBuffer();
+                    const b64 = btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+                    sendJSON(socket, { type: 'segment', audio: b64, id: startTs, idx: localIdx, ts: Date.now(), mime: e.data.type, duration_ms: segDur });
+                } catch(_) {}
+            };
+            mr.onstop = () => {
+                try { stream.getTracks().forEach(t => { try { t.stop(); } catch(_) {} }); } catch(_) {}
+                setTimeout(() => { try { socket.removeEventListener('message', onMessage); } catch(_) {} }, 1000);
+                if (!done && testResults) testResults.textContent = 'No provider transcript received.';
+            };
+            try { mr.start(segDur); } catch(_) {}
+            setTimeout(() => { try { mr.stop(); } catch(_) {} }, segDur);
+        } catch(err) {
+            if (testResults) testResults.textContent = `Test via WS failed: ${err && err.message ? err.message : 'error'}`;
+        }
+    });
     if (segmentLenGroup) {
         const radios = segmentLenGroup.querySelectorAll('input[type="radio"][name="segmentLen"]');
         radios.forEach(r => {
@@ -609,22 +490,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const v = Number(r.value);
                 if (!Number.isNaN(v) && v >= 5000 && v <= 300000) {
                     segmentMs = v;
-                    // Do not stop active recorders when changing segment length
-                    try {
-                        if (testRecord2s) {
-                            const secs = Math.round(Number(segmentMs || 10000)/1000);
-                            testRecord2s.textContent = `Record sample (${secs}s)`;
-                        }
-                    } catch(_) {}
+                    try { if (mediaRecorder && mediaRecorder.state === 'recording') { try { mediaRecorder.stop(); } catch(_) {} } } catch(_) {}
                 }
             });
         });
-        try {
-            if (testRecord2s) {
-                const secs = Math.round(Number(segmentMs || 10000)/1000);
-                testRecord2s.textContent = `Record sample (${secs}s)`;
-            }
-        } catch(_) {}
     }
 
     startRecordingButton.addEventListener('click', async () => {
@@ -633,15 +502,12 @@ document.addEventListener('DOMContentLoaded', () => {
         startTranscribeButton.disabled = false;
         stopTranscribeButton.disabled = true;
         enableGoogleSpeech = false;
-        // Capture current setting for this recording only
-        activeSegmentMs = Number(segmentMs || 10000);
         resetSegmentsState();
         await prepareNewRecording();
         try { await acquireWakeLock(); } catch(_) {}
-        // HTTP-only; no socket
-        // Do not auto-enable transcribe here
+        await openSocket();
+        // Do not auto-enable transcribe here; it will enable on first segment
         // Recorder
-        try { startElapsedTimer(currentRecording); } catch(_) {}
         try {
             safelyStopStream(currentStream); currentStream = null;
             currentStream = await getMicStream();
@@ -664,27 +530,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (currentRecording) {
                     currentRecording.audioUrl = URL.createObjectURL(audioBlob);
                     currentRecording.clientSizeBytes = audioBlob.size;
-                    currentRecording.useLocalPreview = !!showLocalPreview;
                     renderRecordingPanel(currentRecording);
+                }
+                if (uploadFullOnStop) {
                     try {
-                        // After stop, trigger HTMX refresh; if HTMX not present, fallback to manual fetch
-                        const fullDiv = document.getElementById(`fulltable-${currentRecording.id}`);
-                        if (fullDiv) {
-                            try { fullDiv.dispatchEvent(new CustomEvent('refresh-full', { bubbles: true })); } catch(_) {}
-                            // Fallback: manual POST and replace innerHTML
-                            try {
-                                const fd = new FormData();
-                                fd.append('record', JSON.stringify(currentRecording));
-                                fetch('/render/full_row', { method: 'POST', body: fd })
-                                  .then(r => r.text()).then(html => { try { fullDiv.innerHTML = html; } catch(_) {} }).catch(()=>{});
-                            } catch(_) {}
+                        if (socket && socket.readyState === WebSocket.OPEN) {
+                            const fullBuf = await audioBlob.arrayBuffer();
+                            const b64full = btoa(String.fromCharCode.apply(null, new Uint8Array(fullBuf)));
+                            sendJSON(socket, { type: 'full_upload', audio: b64full, mime: recMimeType || 'audio/webm' });
                         }
                     } catch(_) {}
                 }
-                try { if (currentRecording) stopElapsedTimer(currentRecording); } catch(_) {}
-                // uploadFullOnStop via HTTP can be added later
                 if (exportFullOnStop) {
-                    try { await startRemuxAsync(currentRecording); } catch(_) {}
+                    try {
+                        // Ask server to export full by concatenating saved segments for this recording id
+                        const recId = String((currentRecording && currentRecording.startTs) || Date.now());
+                        const res = await fetch('/export_full', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recording_id: recId }) });
+                        const data = await res.json();
+                        console.log('HTTP: export_full response', data);
+                        // Insert an additional full row if server returns a URL
+                        if (data && data.ok && data.url && currentRecording) {
+                            // Render full row via HTMX refresh
+                            currentRecording.serverUrl2 = data.url;
+                            await renderRecordingPanel(currentRecording);
+                        }
+                    } catch(_) {}
                 }
             };
             // Start continuous full recorder (no timeslice)
@@ -704,27 +574,19 @@ document.addEventListener('DOMContentLoaded', () => {
         stopRecordingButton.disabled = true;
         startTranscribeButton.disabled = true;
         stopTranscribeButton.disabled = true;
-        // No socket to disable
+        try { if (autoTranscribeToggle && autoTranscribeToggle.checked && socket && socket.readyState === WebSocket.OPEN) sendJSON(socket, { type: 'transcribe', enabled: false }); } catch(_) {}
         try { if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop(); } catch(_) {}
         try { transcribeTimeouts.forEach((to) => { try { clearTimeout(to); } catch(_) {} }); transcribeTimeouts.clear(); } catch(_) {}
         try { segmentIdToIndex.clear(); } catch(_) {}
         // Stop rotating loop
         try { segmentLoopActive = false; if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch(_) {}
-        try { if (currentRecording) stopElapsedTimer(currentRecording); } catch(_) {}
     });
-
-    // Ensure tab switches or visibility changes do not stop recording automatically
-    try {
-        document.addEventListener('visibilitychange', () => { /* keep alive */ });
-        window.addEventListener('blur', () => { /* keep alive */ });
-        window.addEventListener('focus', () => { /* keep alive */ });
-    } catch(_) {}
 
     startTranscribeButton.addEventListener('click', () => {
         enableGoogleSpeech = true;
         startTranscribeButton.disabled = true;
         stopTranscribeButton.disabled = false;
-        // HTTP-only
+        try { if (socket && socket.readyState === WebSocket.OPEN) sendJSON(socket, { type: 'transcribe', enabled: true }); } catch(_) {}
     });
     if (autoTranscribeToggle) {
         const applyAutoState = () => {
@@ -747,90 +609,61 @@ document.addEventListener('DOMContentLoaded', () => {
         enableGoogleSpeech = false;
         startTranscribeButton.disabled = false;
         stopTranscribeButton.disabled = true;
-        // HTTP-only
+        try { if (socket && socket.readyState === WebSocket.OPEN) sendJSON(socket, { type: 'transcribe', enabled: false }); } catch(_) {}
     });
     // Rotating-per-segment implementation (HTTP per-segment upload)
     function startRotatingSegment() {
         if (segmentLoopActive) return;
         segmentLoopActive = true;
         let segIdx = 0;
-        const runOne = () => {
+        const step = () => {
             if (!segmentLoopActive || !currentStream) return;
             const ts = Date.now();
             const base = (currentRecording && currentRecording.startTs) || ts;
-            const dur = Number(activeSegmentMs || segmentMs || 10000);
+            const dur = Number(segmentMs || 10000);
             const startMs = base + (segIdx * dur);
             const endMs = startMs + dur;
-            // Pre-seed segment entry
             try { while (currentRecording.segments.length <= segIdx) currentRecording.segments.push(null); } catch(_) {}
             const seeded = { idx: segIdx, url: '', mime: recMimeType || 'audio/webm', size: 0, ts, startMs, endMs, clientId: ts };
             try { currentRecording.segments[segIdx] = seeded; } catch(_) {}
-            // Start a fresh recorder for this slice
+            let localBlob = null;
             try { segmentRecorder = new MediaRecorder(currentStream, recOptions); } catch(e) { console.warn('Segment recorder init failed', e); segmentLoopActive = false; return; }
-            let handled = false; // guard against multiple ondataavailable
-            let capturedBlob = null;
-            const thisIdx = segIdx;
-            segmentRecorder.ondataavailable = async (e) => {
-                if (handled) return;
-                if (!e.data || !e.data.size) return;
-                handled = true;
-                try {
-                    capturedBlob = e.data;
-                    const ab = await capturedBlob.arrayBuffer();
-                    const bytes = new Uint8Array(ab);
-                    let bin = ''; const CHUNK = 0x8000; for (let i=0;i<bytes.length;i+=CHUNK) bin += String.fromCharCode.apply(null, bytes.subarray(i,i+CHUNK));
-                    const b64 = btoa(bin);
-                    const recId = String((currentRecording && currentRecording.startTs) || Date.now());
-                    const payload = { recording_id: recId, audio_b64: b64, mime: capturedBlob.type || 'audio/webm', duration_ms: (activeSegmentMs || segmentMs), id: ts, idx: thisIdx, ts };
-                    const res = await fetch('/segment_upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                    const data = await res.json();
-                    if (data && data.ok) {
-                        const saved = data.saved || {}; const url = saved.url || '';
-                        try { currentRecording.segments[thisIdx] = Object.assign({}, seeded, { url, mime: saved.mime || (capturedBlob && capturedBlob.type) || '', size: saved.size || (capturedBlob && capturedBlob.size) || 0, startMs, endMs }); } catch(_) {}
-                        try {
-                            const row = await prependSegmentRow(currentRecording, thisIdx, { url, mime: saved.mime || (capturedBlob && capturedBlob.type), size: saved.size || (capturedBlob && capturedBlob.size), ts }, startMs, endMs);
-                            if (!row) {
-                                try { await renderRecordingPanel(currentRecording); } catch(_) {}
-                                try { await prependSegmentRow(currentRecording, thisIdx, { url, mime: saved.mime || (capturedBlob && capturedBlob.type), size: saved.size || (capturedBlob && capturedBlob.size), ts }, startMs, endMs); } catch(_) {}
-                            }
-                        } catch(_) {}
-                        const results = data.results || {};
-                        Object.keys(results).forEach(svc => {
-                            const txt = results[svc] || '';
-                            const arr = (currentRecording.transcripts[svc] = currentRecording.transcripts[svc] || []);
-                            while (arr.length <= thisIdx) arr.push('');
-                            arr[thisIdx] = txt;
-                            try { const row = document.getElementById(`segrow-${currentRecording.id}-${thisIdx}`); if (row) { const td = row.querySelector(`td[data-svc="${svc}"]`); if (td) td.textContent = txt; } } catch(_) {}
-                        });
-                        // Update fullAppend live
-                        try {
+            segmentRecorder.ondataavailable = (e) => { if (e.data && e.data.size) localBlob = e.data; };
+            segmentRecorder.onstop = async () => {
+                if (localBlob && localBlob.size) {
+                    try {
+                        const ab = await localBlob.arrayBuffer();
+                        const bytes = new Uint8Array(ab);
+                        let bin = ''; const CHUNK = 0x8000; for (let i=0;i<bytes.length;i+=CHUNK) bin += String.fromCharCode.apply(null, bytes.subarray(i,i+CHUNK));
+                        const b64 = btoa(bin);
+                        const recId = String((currentRecording && currentRecording.startTs) || Date.now());
+                        const payload = { recording_id: recId, audio_b64: b64, mime: localBlob.type || 'audio/webm', duration_ms: segmentMs, id: ts, idx: segIdx, ts };
+                        const res = await fetch('/segment_upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                        const data = await res.json();
+                        if (data && data.ok) {
+                            const saved = data.saved || {}; const url = saved.url || '';
+                            try { currentRecording.segments[segIdx] = Object.assign({}, seeded, { url, mime: saved.mime || localBlob.type || '', size: saved.size || localBlob.size || 0 }); } catch(_) {}
+                            try { await prependSegmentRow(currentRecording, segIdx, { url, mime: saved.mime || localBlob.type, size: saved.size || localBlob.size, ts }, startMs, endMs); } catch(_) {}
+                            const results = data.results || {};
                             Object.keys(results).forEach(svc => {
                                 const txt = results[svc] || '';
-                                if (!txt) return;
-                                currentRecording.fullAppend = currentRecording.fullAppend || {};
-                                const old = currentRecording.fullAppend[svc] || '';
-                                currentRecording.fullAppend[svc] = (old ? (old + ' ' + txt) : txt).trim();
-                                const fullCell = document.querySelector(`#fulltable-${currentRecording.id} td[data-svc="${svc}"]`);
-                                if (fullCell) fullCell.textContent = currentRecording.fullAppend[svc];
+                                const arr = (currentRecording.transcripts[svc] = currentRecording.transcripts[svc] || []);
+                                while (arr.length <= segIdx) arr.push('');
+                                arr[segIdx] = txt;
+                                try { const row = document.getElementById(`segrow-${currentRecording.id}-${segIdx}`); if (row) { const td = row.querySelector(`td[data-svc="${svc}"]`); if (td) td.textContent = txt; } } catch(_) {}
                             });
-                        } catch(_) {}
-                    } else {
-                        console.warn('segment_upload failed', data);
-                    }
-                } catch(err) {
-                    console.warn('segment upload error', err);
+                        } else {
+                            console.warn('segment_upload failed', data);
+                        }
+                    } catch(e) { console.warn('segment upload error', e); }
                 }
-            };
-            segmentRecorder.onstop = () => {
-                // Start next slice only once the current recorder has fully stopped
-                if (!segmentLoopActive) return;
-                segIdx = thisIdx + 1;
-                setTimeout(() => { if (segmentLoopActive) runOne(); }, 0);
+                segIdx += 1;
+                if (segmentLoopActive) setTimeout(step, 0);
             };
             try { segmentRecorder.start(); } catch(e) { console.warn('segmentRecorder start failed', e); segmentLoopActive = false; return; }
             setTimeout(() => { try { if (segmentRecorder && segmentRecorder.state === 'recording') segmentRecorder.stop(); } catch(_) {} }, dur);
         };
-        runOne();
+        step();
     }
 });
 
