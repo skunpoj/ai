@@ -35,7 +35,8 @@ export async function renderRecordingPanel(record) {
   const downloadIcon = srcUrl ? `<a href="${srcUrl}" download title="Download" data-load-full="${srcUrl}" style="cursor:pointer;text-decoration:none">📥</a>` : '';
   const playerAndDownload = `${srcUrl ? `<audio controls><source src="${srcUrl}" type="${mime}"></audio>` : ''} ${srcUrl ? `${downloadIcon} ${sizeHtml}` : ''}`;
 
-  const services = (await getServices()).filter(s => !!s.enabled);
+  // Cache services more aggressively to avoid repeated /services fetches during rapid UI updates
+  const services = (await getServices(8000)).filter(s => !!s.enabled);
   const translationEnabled = !!(window && window.APP_FLAGS && window.APP_FLAGS.enable_translation);
 
   let segRowsHtml = '';
@@ -55,7 +56,13 @@ export async function renderRecordingPanel(record) {
         return `<td data-svc="${svc.key}">${joined}</td>`;
       }).join('');
       const emptyTime = `<td data-col="time">full record</td>`;
-      const transCell = translationEnabled ? `<td data-svc="translation"></td>` : '';
+      const transJoined = (() => {
+        try {
+          const arr = (record.transcripts && record.transcripts.translation) ? record.transcripts.translation : [];
+          return Array.isArray(arr) ? arr.filter(Boolean).join(' ') : '';
+        } catch(_) { return ''; }
+      })();
+      const transCell = translationEnabled ? `<td data-svc="translation">${transJoined}</td>` : '';
       const playCell = `<td>${playerHtml} ${dlHtml}${sizeHtml}</td>`;
       segRowsHtml += `<tr id="fullrowseg-${record.id}">${emptyTime}${fullTexts}${transCell}${playCell}</tr>`;
     }
@@ -90,6 +97,18 @@ export async function renderRecordingPanel(record) {
   }
 
   const fullHxVals = JSON.stringify({ record: JSON.stringify(record) }).replace(/"/g, '&quot;');
+  // If the full table already exists (e.g., summary was swapped in), avoid rebuilding it.
+  // Only update the segments tbody to preserve server-rendered summary content.
+  try {
+    const existingFull = document.getElementById(`fulltable-${record.id}`);
+    if (existingFull) {
+      // Keep server summary; just update rows and refresh with the latest record snapshot
+      const segBody = document.getElementById(`segtbody-${record.id}`);
+      if (segBody) segBody.innerHTML = `${fullTopHtml}${segRowsHtml}`;
+      // Do not trigger summary here to avoid duplicate /render/full_row calls; app.js handles it once
+      return;
+    }
+  } catch(_) {}
   // Always render joined full transcript immediately; the server will replace with a
   // summary via HTMX when available (after stop). This avoids a blank state.
   const fullCells = services.map(svc => {
@@ -98,9 +117,10 @@ export async function renderRecordingPanel(record) {
     return `<td data-svc="${svc.key}">${joined}</td>`;
   }).join('');
 
+  // Placeholder header must include Translation to match server full_row response
   panel.innerHTML = `
     <div>
-      <div id="fulltable-${record.id}" hx-post="/render/full_row" hx-trigger="load, refresh-full" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}">
+      <div id="fulltable-${record.id}">
         <table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0; border:0; width:100%">
           <thead>
             <tr>
@@ -111,6 +131,9 @@ export async function renderRecordingPanel(record) {
             <tr>${fullCells}</tr>
           </tbody>
         </table>
+      </div>
+      <div id="summarytable-${record.id}" hx-post="/render/full_row" hx-trigger="refresh-summary" hx-target="this" hx-swap="innerHTML" hx-vals="${fullHxVals}" style="min-height:24px;margin-top:6px;display:block">
+        <small style="color:#aaa">Waiting for summary…</small>
       </div>
     </div>
     <div style="margin-top:12px">
@@ -129,6 +152,8 @@ export async function renderRecordingPanel(record) {
       </table>
     </div>
   `;
+  // Ensure HTMX processes dynamically inserted hx-* attributes (summary container)
+  try { if (window && window.htmx && typeof window.htmx.process === 'function') window.htmx.process(panel); } catch(_) {}
 }
 
 

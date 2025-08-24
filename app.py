@@ -219,7 +219,11 @@ cred = ensure_google_credentials_from_env()
 SEGMENT_MS = SEGMENT_MS_DEFAULT
 
 # Include HTMX SSE extension for server-sent events
-_HDRS = (Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"),)
+_HDRS = (
+    Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"),
+    # Enable client-side Markdown rendering for elements with class "marked"
+    MarkdownJS(),
+)
 app, rt = fast_app(exts='ws', hdrs=_HDRS) # WS for audio; SSE for UI updates
 # Track active websockets for forced shutdown
 try:
@@ -358,14 +362,20 @@ def settings_bulk(
 def update_summary_prompt(req: Any = None) -> Any:
     # HTMX form handler; returns a small confirmation HTML snippet
     try:
-        data = req.form() if req is not None else {}
+        # Accept both form-urlencoded and JSON
+        try:
+            data = req.json() if req is not None else {}
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = req.form() if req is not None else {}
         val = (data.get("prompt") or "").strip()
         if not val:
-            return HTMLResponse("<small style=\"color:#f66\">Prompt cannot be empty.</small>")
+            return JSONResponse({"ok": False, "error": "empty_prompt"})
         set_full_summary_prompt(val)
-        return HTMLResponse("<small style=\"color:#6f6\">Saved.</small>")
-    except Exception:
-        return HTMLResponse("<small style=\"color:#f66\">Save failed.</small>")
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"server_error: {e}"})
 
 @rt("/translation_settings", methods=["POST"])
 def update_translation_settings(req: Any = None) -> Any:
@@ -474,7 +484,8 @@ def render_full_row_route(record: str = '') -> Any:
         rec = {}
     try:
         services = [s for s in registry_list() if s.get("enabled")]
-        header = Tr(*[Th(s["label"]) for s in services])
+        # Match initial provider table structure: service columns + Translation
+        header = Tr(*[Th(s["label"]) for s in services], Th("Translation"))
         # Compute summaries using Gemini when enabled and only after Stop
         from server.services.gemini_api import extract_text_from_gemini_response as _extract
         summaries = {}
@@ -533,7 +544,13 @@ def render_full_row_route(record: str = '') -> Any:
                             val = " ".join([str(x) for x in arr if x])
                     except Exception:
                         val = ""
-            cells.append(Td(val, data_svc=key))
+            cells.append(Td(val, data_svc=key, cls='marked'))
+        # Append Translation cell to keep columns aligned with initial render
+        try:
+            tr_val = ((rec.get("fullAppend", {}) or {}).get("translation", ""))
+            cells.append(Td(tr_val, data_svc="translation"))
+        except Exception:
+            cells.append(Td("", data_svc="translation"))
         row = Tr(*cells, id=f"fullrow-{rec.get('id','')}")
         table = Table(
             Thead(header),
@@ -543,6 +560,76 @@ def render_full_row_route(record: str = '') -> Any:
         return HTMLResponse(str(table))
     except Exception:
         return HTMLResponse("<table></table>")
+
+@rt("/render/full_row_json", methods=["POST"])
+def render_full_row_json(record: str = '') -> Any:
+    try:
+        rec = record if isinstance(record, dict) else (json.loads(record) if isinstance(record, str) and record else {})
+    except Exception:
+        rec = {}
+    try:
+        services = [s for s in registry_list() if s.get("enabled")]
+        labels = [s.get("label") or s.get("key") for s in services]
+        keys = [s.get("key") for s in services]
+        from server.services.gemini_api import extract_text_from_gemini_response as _extract
+        summaries = {}
+        if bool(getattr(app_state, 'enable_summarization', True)) and getattr(app_state, 'gemini_model', None) is not None and bool(rec.get('stopTs')):
+            for s in services:
+                key = s["key"]
+                full_text = ((rec.get("fullAppend", {}) or {}).get(key, ""))
+                if not full_text:
+                    try:
+                        arr = ((rec.get("transcripts", {}) or {}).get(key, []) or [])
+                        if isinstance(arr, list):
+                            full_text = " ".join([str(x) for x in arr if x])
+                    except Exception:
+                        full_text = ""
+                if not full_text:
+                    summaries[key] = ""
+                    continue
+                try:
+                    prompt = (app_state.full_summary_prompt or "Summarize the transcription.")
+                    resp = app_state.gemini_model.generate_content([
+                        {"text": prompt},
+                        {"text": full_text}
+                    ])
+                    summaries[key] = _extract(resp) or ""
+                except Exception:
+                    summaries[key] = full_text
+        # Pick a single provider summary string to simplify client rendering
+        summary_text = ""
+        try:
+            # Prefer providers in current registry order
+            for s in services:
+                k = s.get("key")
+                if not k:
+                    continue
+                val = (summaries.get(k) or "").strip()
+                if val:
+                    summary_text = val
+                    break
+            # Fallback to any non-empty fullAppend if no summary produced
+            if not summary_text:
+                for s in services:
+                    k = s.get("key")
+                    if not k:
+                        continue
+                    val = (((rec.get("fullAppend", {}) or {}).get(k, "")) or "").strip()
+                    if val:
+                        summary_text = val
+                        break
+        except Exception:
+            summary_text = summary_text or ""
+        return JSONResponse({
+            "ok": True,
+            "labels": labels,
+            "keys": keys,
+            "summaries": summaries,
+            "summary_text": summary_text,
+            "stopTs": rec.get('stopTs', 0)
+        })
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"server_error: {e}"})
 
 @rt("/events")
 async def sse_events() -> Any:

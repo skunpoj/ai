@@ -7,6 +7,7 @@
 //   (before server confirmation) so playback is visible immediately. It tags
 //   the row with data-temp-url so the caller can revoke the blob URL later.
 import { getServicesCached } from '/static/ui/services.js';
+// Avoid thrashing /services during rapid segment updates by using a longer TTL here
 
 export function showPendingCountdown(recordId, segmentMs, isActiveFn, isRecordingFn) {
   try {

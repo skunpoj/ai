@@ -79,6 +79,8 @@ hr { display:none; }
             Script(f"let CHUNK_MS = {CHUNK_MS};"),
             Script(f"let SEGMENT_MS = {SEGMENT_MS_DEFAULT};"),
             Script("window.SEGMENT_MS = SEGMENT_MS;"),
+            # Ensure MarkedJS is available globally for client-side markdown rendering
+            Script(src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
             Script(
                 f"window.GOOGLE_AUTH_INFO = {json.dumps(app_state.auth_info or {})};\n"
                 f"window.GOOGLE_AUTH_READY = {( 'true' if (app_state.speech_client and app_state.streaming_config) else 'false' )};\n"
@@ -236,9 +238,9 @@ def build_panel_html(record: Dict[str, Any]) -> str:
     )
 
     # Provider table (one column per enabled service); live text filled via WS
-    # Add Translation column header at end
+    # Add Translation column header at end. Use 'marked' class for client-side markdown rendering.
     full_header = Tr(*[Th(s["label"], style="border:0;padding:0") for s in services], Th("Translation", style="border:0;padding:0"))
-    full_cells: List[Any] = [Td(((record.get("fullAppend", {}) or {}).get(s["key"], "")), data_svc=s["key"]) for s in services]
+    full_cells: List[Any] = [Td(((record.get("fullAppend", {}) or {}).get(s["key"], "")), data_svc=s["key"], cls='marked') for s in services]
     # Placeholder translation cell for full row (can be empty or computed later)
     full_cells.append(Td(((record.get("fullAppend", {}) or {}).get("translation", "")), data_svc="translation"))
     provider_table = Table(
@@ -253,7 +255,7 @@ def build_panel_html(record: Dict[str, Any]) -> str:
         provider_table,
         id=f"fulltable-{record.get('id','')}",
         hx_post="/render/full_row",
-        hx_trigger="refresh-full",
+        hx_trigger="load, refresh-full",
         hx_target="this",
         hx_swap="innerHTML",
         hx_vals=json.dumps({"record": record})
@@ -431,7 +433,9 @@ def render_full_row(req) -> Any:
         record = {}
     try:
         services = [s for s in services_json() if s.get("enabled")]
-        full_header = Tr(*[Th(s["label"]) for s in services])
+        # Match the provider table built in build_panel_html: service columns + Translation
+        # Summary table shows only provider columns (no Translation column here)
+        full_header = THead(Tr(*[Th(s["label"]) for s in services]))
         # Compute summaries using Gemini if configured
         summaries: Dict[str, str] = {}
         if getattr(app_state, 'enable_summarization', True) and app_state.gemini_model is not None:
@@ -464,20 +468,21 @@ def render_full_row(req) -> Any:
                 print(f"[render_full_row] summary[{k}] =", (v or "").replace("\n"," ")[:200])
         except Exception:
             pass
-        # Build cells: during recording show appended text; after stop show summary when enabled
+        # Build cells using summaries when available after Stop; else raw fullAppend
         full_cells: List[Any] = []
         for s in services:
             key = s["key"]
-            show_summary = bool(getattr(app_state, 'enable_summarization', True)) and bool(record.get('stopTs'))
-            if show_summary:
-                val = summaries.get(key)
-                if val is None:
-                    val = ((record.get("fullAppend", {}) or {}).get(key, ""))
-            else:
+            val = None
+            try:
+                if bool(record.get('stopTs')) and key in summaries:
+                    val = summaries.get(key)
+            except Exception:
+                pass
+            if val is None:
                 val = ((record.get("fullAppend", {}) or {}).get(key, ""))
-            full_cells.append(Td(val, data_svc=key))
-        full_row = Tr(*full_cells, id=f"fullrow-{record.get('id','')}")
-        table = Table(THead(full_header), TBody(full_row), border="0", cellpadding="4", cellspacing="0", style="border-collapse:collapse; border:0; width:100%")
+            full_cells.append(Td(val or "", data_svc=key, cls='marked'))
+        full_row = TBody(Tr(*full_cells, id=f"fullrow-{record.get('id','')}") )
+        table = Table(full_header, full_row, border="0", cellpadding="4", cellspacing="0", style="border-collapse:collapse; border:0; width:100%")
         html = str(table)
     except Exception:
         html = "<table></table>"
