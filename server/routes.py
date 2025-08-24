@@ -398,6 +398,12 @@ def render_segment_row(req) -> Any:
         idx = 0
     try:
         services = [s for s in services_json() if s.get("enabled")]
+        try:
+            import json as __dbg_json
+            print("[render_full_row] incoming record.fullAppend:", __dbg_json.dumps(record.get("fullAppend", {}), ensure_ascii=False) )
+            print("[render_full_row] incoming record.transcripts keys:", list((record.get("transcripts", {}) or {}).keys()))
+        except Exception:
+            pass
         row = _render_segment_row(record, services, idx)
         html = str(row)
     except Exception:
@@ -452,6 +458,12 @@ def render_full_row(req) -> Any:
                     summaries[key] = extract_text_from_gemini_response(resp) or ""
                 except Exception:
                     summaries[key] = full_text
+        try:
+            print("[render_full_row] summaries keys:", list(summaries.keys()))
+            for k, v in summaries.items():
+                print(f"[render_full_row] summary[{k}] =", (v or "").replace("\n"," ")[:200])
+        except Exception:
+            pass
         # Build cells: during recording show appended text; after stop show summary when enabled
         full_cells: List[Any] = []
         for s in services:
