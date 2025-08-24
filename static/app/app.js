@@ -62,6 +62,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const stopRecordingButton = document.getElementById('stopRecording');
     const startTranscribeButton = document.getElementById('startTranscribe');
     const stopTranscribeButton = document.getElementById('stopTranscribe');
+    const ytUrlInput = document.getElementById('ytUrl');
+    const ytBtn = document.getElementById('transcribeYoutubeBtn');
     const toggleSegMetaToolbar = document.getElementById('toggleSegMetaToolbar');
     const toggleTimeColToolbar = document.getElementById('toggleTimeColToolbar');
     const showLocalPreviewToggle = document.getElementById('showLocalPreviewToggle');
@@ -675,6 +677,35 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch(_) {}
     });
+
+    // Transcribe YouTube
+    try {
+        if (ytBtn && ytUrlInput) {
+            ytBtn.addEventListener('click', async () => {
+                try {
+                    const url = String(ytUrlInput.value || '').trim();
+                    if (!url) { alert('Enter a YouTube URL'); return; }
+                    ytBtn.disabled = true; ytBtn.textContent = 'Transcribing…';
+                    const body = new URLSearchParams(); body.append('url', url);
+                    const res = await fetch('/transcribe_youtube', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+                    const data = await res.json();
+                    if (data && data.ok && data.record) {
+                        const record = data.record;
+                        recordings.push(record);
+                        lastRecordingId = record.id;
+                        await renderRecordingPanel(record);
+                        try { activateUITab(document.getElementById('recordTabs'), record.id); } catch(_) {}
+                    } else {
+                        alert(`YouTube transcribe failed: ${(data && data.error) || 'unknown'}`);
+                    }
+                } catch (e) {
+                    alert(`YouTube transcribe failed: ${e && e.message ? e.message : 'network'}`);
+                } finally {
+                    ytBtn.disabled = false; ytBtn.textContent = 'Transcribe YouTube';
+                }
+            });
+        }
+    } catch(_) {}
 
     // Test Transcribe wiring
     if (testUpload) testUpload.addEventListener('change', async (e) => {
