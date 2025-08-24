@@ -13,12 +13,7 @@ import { safelyStopStream, createMediaRecorderWithFallback } from '/static/app/r
 import { pendingRowsByIdx, pendingRowsByClientId, pendingRowsByServerId, insertedRows, pendingInsertTimers, segmentIdToIndex, idxKey, clientKey, serverKey, mergePending, setPending, getServerId, resetSegmentsState } from '/static/app/segments_state.js';
 
 // Legacy monolithic controller file.
-// Replaced by /static/app/app.js. This file is intentionally reduced to a stub.
-// If this file executes, something still references /static/main.js.
-// We log an error and throw to surface lingering references early.
-
-console.error('ERROR: static/main.js (legacy) was loaded. The app now uses /static/app/app.js. Please update references.');
-throw new Error('Legacy main.js loaded');
+// Archived: replaced by /static/app/app.js modular controller.
 document.addEventListener('DOMContentLoaded', () => {
     let mediaRecorder; // Continuous full recorder
     let audioChunks = [];

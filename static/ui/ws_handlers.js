@@ -16,6 +16,7 @@ import { parseWSMessage } from '/static/ui/ws.js';
  */
 export function createWsMessageHandler(ctx) {
   return async function(event) {
+    try { if (event && typeof event.data !== 'undefined') console.log('[WS][raw]', event.data); } catch(_) {}
     const data = parseWSMessage(event);
     if (!data) return;
     // Branch on message type

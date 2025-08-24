@@ -81,7 +81,12 @@ export async function renderRecordingPanel(record) {
   }
 
   const fullHxVals = JSON.stringify({ record: JSON.stringify(record) }).replace(/"/g, '&quot;');
-  const fullCells = services.map(svc => `<td data-svc="${svc.key}">${(record.fullAppend && record.fullAppend[svc.key]) || ''}</td>`).join('');
+  // Recompute full text cells from per-segment arrays to avoid duplicates
+  const fullCells = services.map(svc => {
+    const arr = (record.transcripts && record.transcripts[svc.key]) ? record.transcripts[svc.key] : [];
+    const joined = Array.isArray(arr) ? arr.filter(Boolean).join(' ') : '';
+    return `<td data-svc="${svc.key}">${joined}</td>`;
+  }).join('');
 
   panel.innerHTML = `
     <div>

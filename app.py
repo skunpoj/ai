@@ -2,6 +2,165 @@ import os
 from dotenv import load_dotenv
 from fasthtml.common import *
 from starlette.staticfiles import StaticFiles
+from starlette.websockets import WebSocket
+
+# Fresh minimal app using FastHTML built-in websocket extension and inline UI
+
+load_dotenv()
+
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+try:
+    from google import genai as genai_sdk
+    from google.genai import types as genai_types
+except Exception:
+    genai_sdk = None
+    genai_types = None
+
+app, rt = fast_app(exts='ws')
+
+# Serve static for saved recordings only; UI is inline
+_STATIC = os.path.join(_ROOT, "static")
+os.makedirs(os.path.join(_STATIC, "recordings"), exist_ok=True)
+try:
+    app.mount("/static", StaticFiles(directory=_STATIC), name="static")
+except Exception:
+    pass
+
+
+# --- Minimal provider: Gemini consumer API (optional) ---
+class GeminiClient:
+    def __init__(self, api_key: str, model_name: str = "gemini-2.5-flash") -> None:
+        self._client = genai_sdk.Client(api_key=api_key) if genai_sdk else None
+        self._model = model_name
+
+    def transcribe(self, raw: bytes, mime_type: str) -> str:
+        if not self._client:
+            return ""
+        try:
+            parts = [
+                "Transcribe the spoken audio to plain text. Return only the transcript.",
+                genai_types.Part.from_bytes(raw, mime_type=mime_type) if genai_types else {"mime_type": mime_type, "data": raw},
+            ]
+            resp = self._client.models.generate_content(model=self._model, contents=parts)
+            # Try new SDK candidates path first
+            try:
+                cands = getattr(resp, "candidates", None) or []
+                if cands and getattr(cands[0], "content", None) and getattr(cands[0].content, "parts", None):
+                    texts = [getattr(p, "text", "") for p in cands[0].content.parts]
+                    text = " ".join([t.strip() for t in texts if isinstance(t, str) and t.strip()]).strip()
+                    if text:
+                        return text
+            except Exception:
+                pass
+            # Legacy .text
+            txt = getattr(resp, "text", None)
+            if isinstance(txt, str) and txt.strip():
+                return txt.strip()
+            return ""
+        except Exception as e:
+            print(f"Gemini transcribe error: {e}")
+            return ""
+
+
+GEMINI: GeminiClient | None
+try:
+    key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    GEMINI = GeminiClient(key) if key and genai_sdk else None
+    if GEMINI:
+        print("Gemini client ready (consumer API)")
+    else:
+        print("Gemini client not configured; transcripts will be empty")
+except Exception as e:
+    print(f"Gemini init failed: {e}")
+    GEMINI = None
+
+
+@rt("/")
+def index():
+    # Delegate to modular routes; avoids second app/UI definition
+    from server.routes import build_index as _build
+    return _build()
+
+
+@app.ws("/ws")
+async def ws_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    import base64, asyncio
+    from pathlib import Path
+    session_ts = str(int(__import__('time').time()*1000))
+    seg_dir = Path(_STATIC) / "recordings" / f"session_{session_ts}"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            mtype = msg.get("type") if isinstance(msg, dict) else None
+            if mtype == "hello":
+                await websocket.send_json({"type": "ready"})
+                continue
+            if mtype == "segment":
+                try:
+                    raw = base64.b64decode((msg.get("audio") or "").encode("utf-8"))
+                except Exception:
+                    raw = b""
+                idx = int(msg.get("idx") or 0)
+                mime = (msg.get("mime") or "audio/webm").lower()
+                ext = "ogg" if "ogg" in mime else "webm"
+                p = seg_dir / f"segment_{idx}.{ext}"
+                try:
+                    with open(p, "wb") as f:
+                        f.write(raw)
+                except Exception:
+                    pass
+                # send ack to render row
+                start_ms = int(msg.get("start") or 0)
+                end_ms = int(msg.get("end") or 0)
+                rng = f"{_fmt_ms(start_ms)} – {_fmt_ms(end_ms)}" if start_ms and end_ms else ""
+                await websocket.send_json({"type": "segment_saved", "idx": idx, "url": f"/static/recordings/session_{session_ts}/segment_{idx}.{ext}", "range": rng})
+                # transcribe inline, sequentially
+                text = ""
+                if GEMINI and (msg.get("auto") is None or bool(msg.get("auto", True))):
+                    try:
+                        # try preferred container first, then fallback
+                        order = ["audio/ogg", "audio/webm"] if ext == "ogg" else ["audio/webm", "audio/ogg"]
+                        for mt in order:
+                            text = GEMINI.transcribe(raw, mt)
+                            if text:
+                                break
+                    except Exception as e:
+                        text = ""
+                        print(f"transcribe error idx={idx}: {e}")
+                await websocket.send_json({"type": "transcript", "idx": idx, "text": text, "svc": "gemini"})
+                continue
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+def _fmt_ms(ms: int) -> str:
+    try:
+        if not ms:
+            return "0:00"
+        s = int(round(ms/1000))
+        return f"{s//60}:{(s%60):02d}"
+    except Exception:
+        return ""
+
+
+# Disabled minimal inline server; main app below will serve
+# serve()
+
+import os
+from dotenv import load_dotenv
+from fasthtml.common import *
+from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect # Explicitly import WebSocket classes from starlette
 
 # Transcription is now controlled at runtime via Start/Stop Transcribe
@@ -23,6 +182,11 @@ from server.state import app_state
 from server.routes import build_index, render_panel, render_segment_row, render_full_row, _render_segment_row
 from server.ws import ws_handler
 from server.services.registry import list_services as registry_list, set_service_enabled
+from server.services.registry import is_enabled as service_enabled
+from server.services.google_stt import recognize_segment as recognize_google_segment
+from server.services.vertex_gemini import build_vertex_contents, extract_text_from_vertex_response
+from server.services.vertex_langchain import is_available as lc_vertex_available, transcribe_segment_via_langchain
+from server.services.gemini_api import extract_text_from_gemini_response
 from server.sse_bus import stream as sse_stream
 # inline helper for base64 decode (avoid import cycle)
 def _b64_to_bytes(data_url_or_b64: str) -> bytes:
@@ -45,6 +209,7 @@ def _b64_to_bytes(data_url_or_b64: str) -> bytes:
 from typing import Any, List, Dict
 from starlette.responses import JSONResponse, HTMLResponse
 import json
+import os, base64, time
 
 # --- Credentials Handling (START) ---
 cred = ensure_google_credentials_from_env()
@@ -141,10 +306,14 @@ def set_gemini_key(api_key: str = '') -> Any:
         return JSONResponse({"ok": False, "error": f"server_error: {e}"})
 
 
-@app.ws("/ws_stream") # Dedicated WebSocket endpoint for audio streaming
-async def ws_test(websocket: WebSocket):
-    print("Backend: ENTERED /ws_stream function (audio streaming).") # CRITICAL TEST LOG
+@app.ws("/ws_stream")
+async def ws_stream(websocket: WebSocket):
     try:
+        # Ensure handshake is accepted immediately
+        try:
+            await websocket.accept()
+        except Exception:
+            pass
         try:
             app.state.ws_clients.add(websocket)
         except Exception:
@@ -244,81 +413,184 @@ async def test_transcribe(audio_b64: str = "", mime: str = "", services: str = "
         if not raw:
             print("HTTP /test_transcribe: no_audio")
             return JSONResponse({"ok": False, "error": "no_audio"})
-        # very small helper to invoke enabled providers synchronously for a short clip
-        results = {}
-        # Optional filter: comma-separated keys e.g., "google,gemini"
+        # Delegate to centralized transcription helper and optionally filter results
+        from server.services.transcription import transcribe_all
+        full = await transcribe_all(raw, mime)
         requested = set([s.strip() for s in (services or "").split(",") if s.strip()])
+        if requested:
+            filtered = { k: v for k, v in full.items() if k.split('_')[0] in requested }
+        else:
+            filtered = full
+        print(f"HTTP /test_transcribe: results_keys={list(filtered.keys())}")
+        return JSONResponse({"ok": True, "results": filtered})
+    except Exception as e:
+        from starlette.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": f"server_error: {e}"})
+
+
+@rt("/segment_upload", methods=["POST"])
+async def segment_upload(recording_id: str = '', audio_b64: str = '', mime: str = '', duration_ms: int = 10000, id: int = 0, idx: int = 0, ts: int = 0) -> Any:
+    try:
+        rec_id = str(recording_id or '')
+        if not rec_id:
+            rec_id = str(int(time.time()*1000))
         try:
-            from server.services.registry import is_enabled as svc_enabled
-            from server.state import app_state
-            from server.services.google_stt import recognize_segment as recognize_google_segment
-            from server.services.vertex_gemini import build_vertex_contents, extract_text_from_vertex_response
-            from server.services.vertex_langchain import is_available as lc_vertex_available, transcribe_segment_via_langchain
-            from server.services.gemini_api import extract_text_from_gemini_response
-            # Google
-            if ((not requested) or ("google" in requested)) and svc_enabled("google") and app_state.speech_client is not None:
+            seg_bytes = base64.b64decode((audio_b64 or '').encode('utf-8'))
+        except Exception:
+            seg_bytes = b''
+        client_mime = (mime or '').lower()
+        ext = 'ogg' if ('ogg' in client_mime) else 'webm'
+        root = os.path.join(os.path.abspath('static'), 'recordings')
+        os.makedirs(root, exist_ok=True)
+        # Sanitize rec_id for filesystem
+        safe_rec_id = ''.join([c if c.isalnum() or c in ('-', '_') else '_' for c in rec_id])
+        session_dir = os.path.join(root, f'session_{safe_rec_id}')
+        os.makedirs(session_dir, exist_ok=True)
+        seg_index = int(idx or 0)
+        seg_path = os.path.join(session_dir, f'segment_{seg_index}.{ext}')
+        with open(seg_path, 'wb') as f:
+            f.write(seg_bytes)
+        seg_url = f"/static/recordings/session_{safe_rec_id}/segment_{seg_index}.{ext}"
+        try:
+            print(f"HTTP segment_upload: saved idx={seg_index} url={seg_url} size={len(seg_bytes)} mime={client_mime}")
+        except Exception:
+            pass
+        saved = {
+            "idx": seg_index,
+            "url": seg_url,
+            "id": id,
+            "ts": ts or int(time.time()*1000),
+            "ext": ext,
+            "mime": client_mime,
+            "size": len(seg_bytes)
+        }
+        # Dispatch providers sequentially (simple) and collect results
+        results = {}
+        errors = {}
+        try:
+            if service_enabled('google') and app_state.speech_client is not None:
                 try:
-                    print("HTTP /test_transcribe: calling Google")
-                    results["google"] = await recognize_google_segment(app_state.speech_client, raw, ("ogg" if "ogg" in (mime or "").lower() else "webm"))
-                    print(f"HTTP /test_transcribe: Google text_len={len(results['google'] or '')}")
-                except Exception as e:
-                    results["google_error"] = str(e)
-            # Vertex
-            if ((not requested) or ("vertex" in requested)) and svc_enabled("vertex") and app_state.vertex_client is not None:
+                    txt = await recognize_google_segment(app_state.speech_client, seg_bytes, ext)
+                except Exception:
+                    import traceback; errors['google'] = traceback.format_exc(); txt = ''
+                results['google'] = txt
+                try: print(f"HTTP segment_upload: google idx={seg_index} len={len(txt or '')}")
+                except Exception: pass
+        except Exception:
+            pass
+        try:
+            if service_enabled('vertex') and app_state.vertex_client is not None:
+                txt = ''
                 try:
-                    print("HTTP /test_transcribe: calling Vertex")
-                    order = ["audio/ogg", "audio/webm"] if ("ogg" in (mime or "").lower()) else ["audio/webm", "audio/ogg"]
-                    text = ""
+                    order = ['audio/ogg','audio/webm'] if ext == 'ogg' else ['audio/webm','audio/ogg']
                     if lc_vertex_available():
                         for mt in order:
-                            text = transcribe_segment_via_langchain(app_state.vertex_client, app_state.vertex_model_name, raw, mt)
-                            if text: break
+                            txt = transcribe_segment_via_langchain(app_state.vertex_client, app_state.vertex_model_name, seg_bytes, mt)
+                            if txt:
+                                break
                     else:
                         resp = None
                         last_exc = None
                         for mt in order:
                             try:
-                                resp = app_state.vertex_client.models.generate_content(model=app_state.vertex_model_name, contents=build_vertex_contents(raw, mt))
+                                resp = app_state.vertex_client.models.generate_content(
+                                    model=app_state.vertex_model_name,
+                                    contents=build_vertex_contents(seg_bytes, mt)
+                                )
                                 break
                             except Exception as ie:
                                 last_exc = ie
                                 continue
-                        if resp is None and last_exc: raise last_exc
-                        text = extract_text_from_vertex_response(resp)
-                    results["vertex"] = text
-                    print(f"HTTP /test_transcribe: Vertex text_len={len(text or '')}")
-                except Exception as e:
-                    results["vertex_error"] = str(e)
-            # Gemini API
-            if ((not requested) or ("gemini" in requested)) and svc_enabled("gemini") and app_state.gemini_model is not None:
+                        if resp is None and last_exc:
+                            raise last_exc
+                        txt = extract_text_from_vertex_response(resp)
+                except Exception:
+                    import traceback; errors['vertex'] = traceback.format_exc(); txt = ''
+                results['vertex'] = txt
+                try: print(f"HTTP segment_upload: vertex idx={seg_index} len={len(txt or '')}")
+                except Exception: pass
+        except Exception:
+            pass
+        try:
+            if service_enabled('gemini') and getattr(app_state, 'gemini_model', None) is not None:
+                txt = ''
                 try:
-                    print("HTTP /test_transcribe: calling Gemini API")
-                    order = ["audio/ogg", "audio/webm"] if ("ogg" in (mime or "").lower()) else ["audio/webm", "audio/ogg"]
+                    order = ['audio/ogg','audio/webm'] if ext == 'ogg' else ['audio/webm','audio/ogg']
                     resp = None
                     last_exc = None
                     for mt in order:
                         try:
                             resp = app_state.gemini_model.generate_content([
                                 {"text": "Transcribe the spoken audio to plain text. Return only the transcript."},
-                                {"mime_type": mt, "data": raw}
+                                {"mime_type": mt, "data": seg_bytes}
                             ])
                             break
                         except Exception as ie:
-                            print(f"HTTP /test_transcribe: Gemini failed mt={mt}: {ie}")
                             last_exc = ie
                             continue
-                    if resp is None and last_exc: raise last_exc
-                    results["gemini"] = extract_text_from_gemini_response(resp)
-                    print(f"HTTP /test_transcribe: Gemini text_len={len(results['gemini'] or '')}")
-                except Exception as e:
-                    results["gemini_error"] = str(e)
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": f"server_error: {e}"})
-        print(f"HTTP /test_transcribe: results_keys={list(results.keys())}")
-        return JSONResponse({"ok": True, "results": results})
-    except Exception as e:
-        from starlette.responses import JSONResponse
-        return JSONResponse({"ok": False, "error": f"server_error: {e}"})
+                    if resp is None and last_exc:
+                        raise last_exc
+                    txt = extract_text_from_gemini_response(resp)
+                except Exception:
+                    import traceback; errors['gemini'] = traceback.format_exc(); txt = ''
+                results['gemini'] = txt
+                try: print(f"HTTP segment_upload: gemini idx={seg_index} len={len(txt or '')}")
+                except Exception: pass
+        except Exception:
+            pass
+        # AWS placeholder
+        try:
+            if service_enabled('aws'):
+                from server.services import aws_transcribe
+                txt = ''
+                try:
+                    txt = aws_transcribe.recognize_segment_placeholder(seg_bytes, media_format=("ogg" if ext=="ogg" else "webm"))
+                except Exception:
+                    import traceback; errors['aws'] = traceback.format_exc(); txt = ''
+                results['aws'] = txt
+                try: print(f"HTTP segment_upload: aws idx={seg_index} len={len(txt or '')}")
+                except Exception: pass
+        except Exception:
+            pass
+        return JSONResponse({"ok": True, "saved": saved, "results": results, "errors": errors})
+    except Exception:
+        import traceback
+        return JSONResponse({"ok": False, "saved": None, "results": {}, "errors": {"fatal": traceback.format_exc()}})
 
-serve()
+
+@rt("/export_full", methods=["POST"])
+async def export_full(recording_id: str = '') -> Any:
+    try:
+        rec_id = str(recording_id or '')
+        if not rec_id:
+            return JSONResponse({"ok": False, "error": "missing_recording_id"})
+        safe_rec_id = ''.join([c if c.isalnum() or c in ('-', '_') else '_' for c in rec_id])
+        root = os.path.join(os.path.abspath('static'), 'recordings')
+        session_dir = os.path.join(root, f'session_{safe_rec_id}')
+        if not os.path.isdir(session_dir):
+            return JSONResponse({"ok": False, "error": "session_not_found"})
+        # NOTE: Proper WebM/OGG concatenation requires remuxing. Here we avoid heavy remux; instead we zip
+        # segments so the user can download all at once. This prevents creating a broken container.
+        import shutil
+        zip_path = os.path.join(root, f'session_{safe_rec_id}_segments.zip')
+        try:
+            if os.path.isfile(zip_path):
+                os.remove(zip_path)
+        except Exception:
+            pass
+        shutil.make_archive(zip_path[:-4], 'zip', session_dir)
+        url = f"/static/recordings/session_{safe_rec_id}_segments.zip"
+        return JSONResponse({"ok": True, "url": url})
+    except Exception:
+        import traceback
+        return JSONResponse({"ok": False, "error": traceback.format_exc()})
+
+if __name__ == "__main__":
+    try:
+        import uvicorn
+        # Explicit host/port; disable reload to prevent double-start
+        uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5001)), reload=False, log_level="info")
+    except Exception:
+        # Fallback to framework serve if uvicorn is unavailable
+        serve()
 
